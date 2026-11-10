@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: rfid_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rfid_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"     # Porta AMQP do RabbitMQ
+      - "15672:15672"   # Painel Web de Gerenciamento do RabbitMQ (user: guest / pass: guest)
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+volumes:
+  redis_data:
+  rabbitmq_data:
+

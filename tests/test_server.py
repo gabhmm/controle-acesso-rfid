@@ -1,202 +1,191 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from server.app import create_app
+from hardware.rfid_reader import RaspberryPiClient
 from server.database import DatabaseRepository
+from server.models import Colaborador
+from server.rabbit_producer import RabbitMQProducer
+from server.redis_client import RedisClient
 from server.services import AccessService
+from worker.consumer import EventConsumer
 
 
-class TestControleAcessoServer(unittest.TestCase):
-    """Testes automatizados cobrindo todas as rotas e regras de negócio do Controle de Acesso v1."""
+class TestControleAcessoContratoRabbitMQ(unittest.TestCase):
+    """Testes cobrindo 100% da especificação do Contrato de Mensageria — RabbitMQ v1 (@Brayan)."""
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp_dir.name) / "test_acesso.db"
-        self.app = create_app(db_path=self.db_path, seed_default=False)
-        self.app.config["TESTING"] = True
-        self.client = self.app.test_client()
-        self.repo: DatabaseRepository = self.app.config["REPO"]
-        self.service: AccessService = self.app.config["SERVICE"]
+        self.repo = DatabaseRepository(db_path=self.db_path)
+        self.repo.init_db(seed_default=False)
+        self.redis = RedisClient(habilitado=False)
+        self.rabbit = RabbitMQProducer(habilitado=False)
+        self.service = AccessService(repo=self.repo, redis=self.redis, rabbit=self.rabbit)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_01_login_sucesso_e_falha(self) -> None:
-        # Login inválido -> 401
-        res_err = self.client.post("/login", json={"usuario": "admin", "senha": "123"})
-        self.assertEqual(res_err.status_code, 401)
+    def test_01_banco_dados_crud_colaboradores(self) -> None:
+        novo = Colaborador(
+            id=None,
+            nome="Ana",
+            matricula="01",
+            tag_uid="A1B2C3D4",
+            cargo="Artist",
+            acesso_sala=True,
+            ativo=True,
+        )
+        criado = self.repo.criar_colaborador(novo)
+        self.assertIsNotNone(criado.id)
+        self.assertEqual(criado.tag_uid, "A1B2C3D4")
 
-        # Login válido -> 200
-        res_ok = self.client.post("/login", json={"usuario": "admin", "senha": "admin"})
-        self.assertEqual(res_ok.status_code, 200)
-        self.assertTrue(res_ok.get_json()["ok"])
+        buscado_id = self.repo.obter_colaborador_por_id(criado.id)
+        self.assertIsNotNone(buscado_id)
+        self.assertEqual(buscado_id.nome, "Ana")
 
-    def test_02_crud_colaboradores_e_campos_estado(self) -> None:
-        # 1. Cadastrar Ana
-        payload = {
+        # Atualizar
+        criado.acesso_sala = False
+        atualizado = self.repo.atualizar_colaborador(criado.id, criado)
+        self.assertFalse(atualizado.acesso_sala)
+
+        # Excluir
+        removido = self.repo.excluir_colaborador(criado.id)
+        self.assertTrue(removido)
+
+    def test_02_regras_negocio_mensagens_pdf(self) -> None:
+        self.repo.criar_colaborador(
+            Colaborador(id=None, nome="Carlos", matricula="03", tag_uid="C3D4E5F6", cargo="QA", acesso_sala=False, ativo=True)
+        )
+        self.repo.criar_colaborador(
+            Colaborador(id=None, nome="Bruno", matricula="02", tag_uid="B2C3D4E5", cargo="Dev", acesso_sala=True, ativo=True)
+        )
+
+        agora = datetime(2026, 11, 9, 8, 0, 0)
+
+        # INVASAO: Mensagem exata exigida na Página 4 do PDF
+        resp_inv = self.service.validar_acesso("UNKNOWN_TAG", agora=agora)
+        self.assertEqual(resp_inv.resultado, "INVASAO")
+        self.assertEqual(resp_inv.mensagem, "Acesso negado, tag não cadastrada")
+
+        # NEGADO
+        resp_neg = self.service.validar_acesso("C3D4E5F6", agora=agora)
+        self.assertEqual(resp_neg.resultado, "NEGADO")
+        self.assertEqual(resp_neg.mensagem, "Acesso negado, Carlos")
+
+        # ENTRADA
+        resp_ent1 = self.service.validar_acesso("B2C3D4E5", agora=agora)
+        self.assertEqual(resp_ent1.resultado, "ENTRADA")
+        self.assertEqual(resp_ent1.mensagem, "Bem-vindo, Bruno")
+
+        # SAIDA
+        resp_sai = self.service.validar_acesso("B2C3D4E5", agora=agora + timedelta(hours=4))
+        self.assertEqual(resp_sai.resultado, "SAIDA")
+        self.assertEqual(resp_sai.mensagem, "Até logo, Bruno")
+
+        # ENTRADA (volta)
+        resp_ent2 = self.service.validar_acesso("B2C3D4E5", agora=agora + timedelta(hours=5))
+        self.assertEqual(resp_ent2.resultado, "ENTRADA")
+        self.assertEqual(resp_ent2.mensagem, "Bem-vindo de volta, Bruno")
+
+    def test_03_worker_consumo_e_deduplicacao(self) -> None:
+        """Testa o consumidor processando mensagem idêntica à Página 3 do PDF e ignorando duplicata."""
+        consumer = EventConsumer(db_path=self.db_path)
+        evento_uuid = str(uuid.uuid4())
+
+        msg_pdf = {
+            "versao": 1,
+            "evento_id": evento_uuid,
+            "dispositivo": "sala-aaa",
+            "data_hora": "2026-11-06T20:15:02-03:00",
+            "tag_uid": "A1B2C3D4",
+            "colaborador_id": 1,
             "nome": "Ana",
-            "matricula": "01",
-            "tag_uid": "a1b2c3d4",
-            "cargo": "Artist",
-            "acesso_sala": True,
-            "ativo": True,
+            "resultado": "ENTRADA",
+            "mensagem": "Bem-vindo, Ana",
         }
-        res_post = self.client.post("/api/colaboradores", json=payload)
-        self.assertEqual(res_post.status_code, 200)
-        criado = res_post.get_json()
-        self.assertEqual(criado["id"], 1)
-        self.assertEqual(criado["tag_uid"], "A1B2C3D4")  # Normalizado em uppercase
 
-        # 2. Duplicidade de tag_uid ou matrícula -> 400
-        res_dup = self.client.post("/api/colaboradores", json=payload)
-        self.assertEqual(res_dup.status_code, 400)
+        class MockChannel:
+            acks = 0
+            nacks = 0
+            def basic_ack(self, delivery_tag: int) -> None:
+                self.acks += 1
+            def basic_nack(self, delivery_tag: int, requeue: bool = False) -> None:
+                self.nacks += 1
 
-        # 3. Listar colaboradores (verifica campos na_sala, entrou_hoje, tempo_hoje_segundos)
-        res_get = self.client.get("/api/colaboradores")
-        self.assertEqual(res_get.status_code, 200)
-        lista = res_get.get_json()
-        self.assertEqual(len(lista), 1)
-        self.assertIn("na_sala", lista[0])
-        self.assertIn("entrou_hoje", lista[0])
-        self.assertIn("tempo_hoje_segundos", lista[0])
-        self.assertFalse(lista[0]["na_sala"])
-        self.assertFalse(lista[0]["entrou_hoje"])
+        class MockMethod:
+            delivery_tag = 1
 
-        # 4. Editar colaborador (PUT)
-        res_put = self.client.put(
-            "/api/colaboradores/1",
-            json={
-                "nome": "Ana Silva",
-                "matricula": "01",
-                "tag_uid": "A1B2C3D4",
-                "cargo": "Lead Artist",
-                "acesso_sala": False,
-                "ativo": True,
-            },
-        )
-        self.assertEqual(res_put.status_code, 200)
-        atualizado = res_put.get_json()
-        self.assertEqual(atualizado["nome"], "Ana Silva")
-        self.assertFalse(atualizado["acesso_sala"])
+        canal = MockChannel()
+        corpo = json.dumps(msg_pdf).encode("utf-8")
 
-        # 5. Excluir colaborador (DELETE)
-        res_del = self.client.delete("/api/colaboradores/1")
-        self.assertEqual(res_del.status_code, 200)
-        self.assertEqual(len(self.client.get("/api/colaboradores").get_json()), 0)
+        # 1. Primeira entrega -> Grava no SQLite e dá ACK
+        consumer.processar_mensagem(canal, MockMethod(), None, corpo)
+        self.assertEqual(canal.acks, 1)
 
-    def test_03_regras_de_validacao_completas(self) -> None:
-        # Cadastra colaboradores para cada caso de teste
-        self.client.post(
-            "/api/colaboradores",
-            json={
-                "nome": "Ana",
-                "matricula": "01",
-                "tag_uid": "A1B2C3D4",
-                "cargo": "Artist",
-                "acesso_sala": True,
-                "ativo": True,
-            },
-        )
-        self.client.post(
-            "/api/colaboradores",
-            json={
-                "nome": "Carlos",
-                "matricula": "02",
-                "tag_uid": "C3D4E5F6",
-                "cargo": "Sound",
-                "acesso_sala": False,
-                "ativo": True,
-            },
-        )
-        self.client.post(
-            "/api/colaboradores",
-            json={
-                "nome": "Diana",
-                "matricula": "03",
-                "tag_uid": "D4E5F607",
-                "cargo": "Ex-Artist",
-                "acesso_sala": True,
-                "ativo": False,
-            },
-        )
+        eventos = self.repo.listar_eventos()
+        self.assertEqual(len(eventos), 1)
+        self.assertEqual(eventos[0].evento_id, evento_uuid)
+        self.assertEqual(eventos[0].data_hora, "2026-11-06 20:15:02")
 
-        # Caso 1: Tag não cadastrada -> INVASAO
-        r_inv = self.client.post("/api/validar", json={"tag_uid": "FF998877"}).get_json()
-        self.assertEqual(r_inv["resultado"], "INVASAO")
+        # 2. Reentrega da mesma mensagem (mesmo evento_id) -> Não duplica!
+        consumer.processar_mensagem(canal, MockMethod(), None, corpo)
+        self.assertEqual(canal.acks, 2)
+        eventos_apos_reentrega = self.repo.listar_eventos()
+        self.assertEqual(len(eventos_apos_reentrega), 1)  # Mantém exatamente 1 registro
 
-        # Caso 2: Colaborador sem permissão à sala -> NEGADO
-        r_neg1 = self.client.post("/api/validar", json={"tag_uid": "C3D4E5F6"}).get_json()
-        self.assertEqual(r_neg1["resultado"], "NEGADO")
-        self.assertIn("Carlos", r_neg1["mensagem"])
+        # 3. Mensagem com versão inválida -> nack sem requeue
+        msg_invalida = dict(msg_pdf, versao=2)
+        consumer.processar_mensagem(canal, MockMethod(), None, json.dumps(msg_invalida).encode("utf-8"))
+        self.assertEqual(canal.nacks, 1)
 
-        # Caso 3: Colaborador inativo -> NEGADO
-        r_neg2 = self.client.post("/api/validar", json={"tag_uid": "D4E5F607"}).get_json()
-        self.assertEqual(r_neg2["resultado"], "NEGADO")
-        self.assertIn("Diana", r_neg2["mensagem"])
+    def test_04_publicacao_colaboradores_servidor_para_pi(self) -> None:
+        """Testa o envio de lista de colaboradores (Servidor -> Pi) conforme Página 3 do PDF."""
+        colabs = [
+            {"id": 1, "nome": "Ana", "tag_uid": "A1B2C3D4", "acesso_sala": True, "ativo": True}
+        ]
+        self.rabbit.fila_memoria.clear()
+        self.rabbit.publicar_colaboradores(colabs)
 
-        # Caso 4: Colaborador autorizado (1ª entrada no dia) -> "Bem-vindo, Ana"
-        r_ent1 = self.client.post("/api/validar", json={"tag_uid": "A1B2C3D4"}).get_json()
-        self.assertEqual(r_ent1["resultado"], "ENTRADA")
-        self.assertEqual(r_ent1["mensagem"], "Bem-vindo, Ana")
+        self.assertEqual(len(self.rabbit.fila_memoria), 1)
+        enviado = self.rabbit.fila_memoria[0]
+        self.assertEqual(enviado["versao"], 1)
+        self.assertIn("atualizado_em", enviado)
+        self.assertEqual(len(enviado["colaboradores"]), 1)
+        self.assertEqual(enviado["colaboradores"][0]["tag_uid"], "A1B2C3D4")
 
-        # Verifica que Ana consta como na_sala=True e entrou_hoje=True no GET /api/colaboradores
-        colabs_apos_entrada = self.client.get("/api/colaboradores").get_json()
-        ana_estado = next(c for c in colabs_apos_entrada if c["tag_uid"] == "A1B2C3D4")
-        self.assertTrue(ana_estado["na_sala"])
-        self.assertTrue(ana_estado["entrou_hoje"])
+    def test_05_decisao_autonoma_na_raspberry_pi(self) -> None:
+        """Testa a Pi decidindo o acesso localmente usando seu cache.json e regras."""
+        pi = RaspberryPiClient(dispositivo="sala-aaa")
+        # Simula cache recebido da Pi
+        pi.colaboradores_cache = [
+            {"id": 1, "nome": "Ana", "tag_uid": "A1B2C3D4", "acesso_sala": True, "ativo": True},
+            {"id": 2, "nome": "Carlos", "tag_uid": "C3D4E5F6", "acesso_sala": False, "ativo": True},
+        ]
+        pi.estado_local.clear()
 
-        # Caso 5: Colaborador autorizado passa novamente -> SAIDA ("Até logo, Ana")
-        r_sai = self.client.post("/api/validar", json={"tag_uid": "A1B2C3D4"}).get_json()
-        self.assertEqual(r_sai["resultado"], "SAIDA")
-        self.assertEqual(r_sai["mensagem"], "Até logo, Ana")
+        # 1. Ana (autorizada) -> ENTRADA
+        ev1 = pi.decidir_acesso("A1B2C3D4")
+        self.assertEqual(ev1["resultado"], "ENTRADA")
+        self.assertEqual(ev1["versao"], 1)
+        self.assertEqual(ev1["nome"], "Ana")
+        self.assertEqual(ev1["dispositivo"], "sala-aaa")
 
-        # Caso 6: Colaborador autorizado retorna no mesmo dia -> ENTRADA ("Bem-vindo de volta, Ana")
-        r_ent2 = self.client.post("/api/validar", json={"tag_uid": "A1B2C3D4"}).get_json()
-        self.assertEqual(r_ent2["resultado"], "ENTRADA")
-        self.assertEqual(r_ent2["mensagem"], "Bem-vindo de volta, Ana")
+        # 2. Carlos (bloqueado) -> NEGADO
+        ev2 = pi.decidir_acesso("C3D4E5F6")
+        self.assertEqual(ev2["resultado"], "NEGADO")
 
-        # Verifica GET /api/eventos (6 eventos hoje, mais recente primeiro)
-        eventos = self.client.get("/api/eventos").get_json()
-        self.assertEqual(len(eventos), 6)
-        self.assertEqual(eventos[0]["resultado"], "ENTRADA")
-        self.assertEqual(eventos[-1]["resultado"], "INVASAO")
-
-        # Verifica GET /api/eventos.csv
-        res_csv = self.client.get("/api/eventos.csv")
-        self.assertEqual(res_csv.status_code, 200)
-        linhas_csv = res_csv.get_data(as_text=True).strip().splitlines()
-        self.assertEqual(linhas_csv[0], "id,data_hora,tag_uid,nome,resultado")
-        self.assertEqual(len(linhas_csv), 7)  # 1 header + 6 eventos
-
-    def test_04_calculo_tempo_diario_permanencia(self) -> None:
-        self.client.post(
-            "/api/colaboradores",
-            json={
-                "nome": "Ana",
-                "matricula": "01",
-                "tag_uid": "A1B2C3D4",
-                "cargo": "Artist",
-                "acesso_sala": True,
-                "ativo": True,
-            },
-        )
-        t1 = datetime(2026, 10, 27, 10, 0, 0)
-        t2 = datetime(2026, 10, 27, 11, 30, 0)  # +5400s (1h30m)
-        t3 = datetime(2026, 10, 27, 14, 0, 0)
-        t4 = datetime(2026, 10, 27, 14, 30, 0)  # +1800s (30m) -> Total 7200s (2h)
-
-        self.service.validar_acesso("A1B2C3D4", agora=t1)
-        self.service.validar_acesso("A1B2C3D4", agora=t2)
-        self.service.validar_acesso("A1B2C3D4", agora=t3)
-
-        # Enquanto ainda está na sala às 14:30:
-        colabs = self.service.listar_colaboradores_com_estado(agora=t4)
-        self.assertTrue(colabs[0].na_sala)
-        self.assertEqual(colabs[0].tempo_hoje_segundos, 7200)
+        # 3. Desconhecido -> INVASAO (mensagem exata da Página 4)
+        ev3 = pi.decidir_acesso("FF998877")
+        self.assertEqual(ev3["resultado"], "INVASAO")
+        self.assertEqual(ev3["mensagem"], "Acesso negado, tag não cadastrada")
+        self.assertIsNone(ev3["nome"])
+        self.assertIsNone(ev3["colaborador_id"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Ambientes virtuais e IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Banco de dados e caches locais
+*.db-journal
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Mestre Jedi logs privados (mantém apenas templates e tasks compartilhadas se desejar)
+.mestre-jedi/artifacts/
+.mestre-jedi/old_logs/
+

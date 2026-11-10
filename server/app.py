@@ -1,233 +1,246 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
-from functools import wraps
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from flask import (
-    Flask,
-    Response,
-    jsonify,
-    redirect,
-    render_template,
-    request,
-    session,
-    url_for,
-)
+from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
-from server.config import ADMIN_PASS, ADMIN_USER, DB_PATH, PROJECT_ROOT, SECRET_KEY
+from server.config import ADMIN_PASS, ADMIN_USER, DB_PATH, PROJECT_ROOT, RABBITMQ_DISPOSITIVO, RABBITMQ_EXCHANGE
 from server.database import DatabaseRepository
-from server.models import Colaborador
+from server.models import (
+    Colaborador,
+    ColaboradorCreate,
+    ColaboradorResponse,
+    ColaboradorUpdate,
+    Dashboard10MinResponse,
+    EventoResponse,
+    LoginRequest,
+)
+from server.rabbit_producer import rabbit_producer
+from server.redis_client import redis_client
 from server.services import FORMATO_DATA, AccessService
 
+# Diretórios de Templates e Arquivos Estáticos
+TEMPLATE_DIR = PROJECT_ROOT / "client" / "templates"
+STATIC_DIR = PROJECT_ROOT / "client" / "static"
 
-def create_app(db_path: Path | str | None = None, seed_default: bool = True) -> Flask:
-    """Factory da aplicação Flask (Server + Web Client)."""
-    template_dir = PROJECT_ROOT / "client" / "templates"
-    static_dir = PROJECT_ROOT / "client" / "static"
 
-    app = Flask(
-        __name__,
-        template_folder=str(template_dir),
-        static_folder=str(static_dir),
+def create_app(db_path: Path | str | None = None, seed_default: bool = True) -> FastAPI:
+    """Factory da aplicação FastAPI para o Controle de Acesso Distribuído."""
+    app = FastAPI(
+        title="Controle de Acesso RFID & Monitoramento — Lab AAA",
+        description="Servidor REST em FastAPI integrado a Mensageria RabbitMQ e Cache Redis conforme Contrato RabbitMQ v1.",
+        version="2.0.0",
     )
-    app.secret_key = SECRET_KEY
 
+    # Configuração de CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Arquivos Estáticos e Templates
+    if STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
+
+    # Repositório e Serviço
     repo = DatabaseRepository(db_path=db_path or DB_PATH)
     repo.init_db(seed_default=seed_default)
-    service = AccessService(repo=repo)
+    service = AccessService(repo=repo, redis=redis_client, rabbit=rabbit_producer)
 
-    # Guardamos nas extensões do app para acesso limpo em testes caso necessário
-    app.config["REPO"] = repo
-    app.config["SERVICE"] = service
+    app.state.repo = repo
+    app.state.service = service
 
-    def login_required_page(view_func: Callable[..., Any]) -> Callable[..., Any]:
-        @wraps(view_func)
-        def wrapped(*args: Any, **kwargs: Any) -> Any:
-            if not session.get("autenticado"):
-                return redirect(url_for("pagina_login"))
-            return view_func(*args, **kwargs)
+    def esta_autenticado(request: Request) -> bool:
+        return request.cookies.get("auth_session") == "admin_authenticated"
 
-        return wrapped
+    def sincronizar_colaboradores_com_pi() -> None:
+        """Publica a lista atualizada de colaboradores para a Raspberry Pi no RabbitMQ."""
+        colabs = repo.listar_colaboradores()
+        rabbit_producer.publicar_colaboradores([c.to_dict() for c in colabs])
 
-    # -------------------------------------------------------------------------
-    # ROTAS DE PÁGINAS WEB (Front-end exige login)
-    # -------------------------------------------------------------------------
+    # Publica a lista inicial ao iniciar o servidor
+    @app.on_event("startup")
+    def on_startup() -> None:
+        try:
+            sincronizar_colaboradores_com_pi()
+        except Exception:
+            pass
 
-    @app.get("/")
-    def index() -> Any:
-        if session.get("autenticado"):
-            return redirect(url_for("pagina_monitor"))
-        return redirect(url_for("pagina_login"))
+    # =========================================================================
+    # ROTAS DE PÁGINAS WEB (FRONT-END)
+    # =========================================================================
 
-    @app.get("/login")
-    def pagina_login() -> Any:
-        if session.get("autenticado"):
-            return redirect(url_for("pagina_monitor"))
-        return render_template("login.html")
+    @app.get("/", response_class=HTMLResponse)
+    def index(request: Request) -> Any:
+        if esta_autenticado(request):
+            return RedirectResponse(url="/monitor", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
-    @app.get("/colaboradores")
-    @login_required_page
-    def pagina_colaboradores() -> Any:
-        return render_template("colaboradores.html", usuario=session.get("usuario", "admin"))
+    @app.get("/login", response_class=HTMLResponse)
+    def pagina_login(request: Request) -> Any:
+        if esta_autenticado(request):
+            return RedirectResponse(url="/monitor", status_code=status.HTTP_302_FOUND)
+        return templates.TemplateResponse(request, "login.html")
 
-    @app.get("/monitor")
-    @login_required_page
-    def pagina_monitor() -> Any:
-        return render_template("monitor.html", usuario=session.get("usuario", "admin"))
+    @app.get("/monitor", response_class=HTMLResponse)
+    def pagina_monitor(request: Request) -> Any:
+        if not esta_autenticado(request):
+            return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+        return templates.TemplateResponse(request, "monitor.html", {"usuario": "admin"})
 
-    # -------------------------------------------------------------------------
+    @app.get("/colaboradores", response_class=HTMLResponse)
+    def pagina_colaboradores(request: Request) -> Any:
+        if not esta_autenticado(request):
+            return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+        return templates.TemplateResponse(request, "colaboradores.html", {"usuario": "admin"})
+
+    # =========================================================================
     # ROTAS DE AUTENTICAÇÃO
-    # -------------------------------------------------------------------------
+    # =========================================================================
 
     @app.post("/login")
-    def api_login() -> tuple[Response, int]:
-        dados: dict[str, Any] = request.get_json(silent=True) or {}
-        usuario = str(dados.get("usuario", "")).strip()
-        senha = str(dados.get("senha", "")).strip()
+    def api_login(payload: LoginRequest, response: Response) -> Any:
+        if payload.usuario.strip() == ADMIN_USER and payload.senha.strip() == ADMIN_PASS:
+            response.set_cookie(key="auth_session", value="admin_authenticated", max_age=86400, httponly=True)
+            return {"ok": True, "mensagem": "Autenticado com sucesso"}
 
-        if usuario == ADMIN_USER and senha == ADMIN_PASS:
-            session["autenticado"] = True
-            session["usuario"] = usuario
-            return jsonify({"ok": True, "mensagem": "Autenticado com sucesso"}), 200
-
-        return jsonify({"ok": False, "erro": "Credenciais inválidas"}), 401
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"ok": False, "erro": "Credenciais inválidas"},
+        )
 
     @app.post("/logout")
-    def api_logout() -> tuple[Response, int]:
-        session.clear()
-        return jsonify({"ok": True}), 200
+    def api_logout(response: Response) -> Any:
+        response.delete_cookie(key="auth_session")
+        return {"ok": True}
 
-    # -------------------------------------------------------------------------
-    # ROTAS DA API REST (Abertas na v1 conforme api contratos.md)
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # ENDPOINTS REST: GESTÃO DE COLABORADORES (Servidor -> Pi via RabbitMQ)
+    # =========================================================================
 
-    @app.get("/api/colaboradores")
-    def listar_colaboradores() -> Response:
-        colaboradores = service.listar_colaboradores_com_estado()
-        resp = jsonify([c.to_dict() for c in colaboradores])
-        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        return resp
+    @app.get("/api/colaboradores", response_model=list[ColaboradorResponse])
+    def listar_colaboradores() -> Any:
+        colabs = service.listar_colaboradores_com_estado()
+        return [c.to_dict() for c in colabs]
 
-    @app.post("/api/colaboradores")
-    def criar_colaborador() -> tuple[Response, int]:
-        dados: dict[str, Any] = request.get_json(silent=True) or {}
-        nome = str(dados.get("nome", "")).strip()
-        matricula = str(dados.get("matricula", "")).strip()
-        tag_uid = str(dados.get("tag_uid", "")).strip().upper()
-        cargo = str(dados.get("cargo", "")).strip()
-        acesso_sala = bool(dados.get("acesso_sala", True))
-        ativo = bool(dados.get("ativo", True))
-
-        if not nome or not matricula or not tag_uid or not cargo:
-            return (
-                jsonify({"erro": "Campos obrigatórios: nome, matricula, tag_uid, cargo"}),
-                400,
-            )
-
+    @app.post("/api/colaboradores", response_model=ColaboradorResponse, status_code=status.HTTP_201_CREATED)
+    def criar_colaborador(payload: ColaboradorCreate) -> Any:
+        tag_norm = payload.tag_uid.strip().upper()
         novo = Colaborador(
             id=None,
-            nome=nome,
-            matricula=matricula,
-            tag_uid=tag_uid,
-            cargo=cargo,
-            acesso_sala=acesso_sala,
-            ativo=ativo,
+            nome=payload.nome.strip(),
+            matricula=payload.matricula.strip(),
+            tag_uid=tag_norm,
+            cargo=payload.cargo.strip(),
+            acesso_sala=payload.acesso_sala,
+            ativo=payload.ativo,
         )
         try:
             criado = repo.criar_colaborador(novo)
-            return jsonify(criado.to_dict()), 200
+            redis_client.invalidar_tag_cache(tag_norm)
+            # Notifica a Raspberry Pi publicando a nova lista na fila 'pi.<disp>.colaboradores'
+            sincronizar_colaboradores_com_pi()
+            return criado.to_dict()
         except sqlite3.IntegrityError:
-            return (
-                jsonify({"erro": "Matrícula ou Tag RFID já cadastrada para outro colaborador."}),
-                400,
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Matrícula ou Tag RFID já cadastrada para outro colaborador.",
             )
 
-    @app.put("/api/colaboradores/<int:colab_id>")
-    def editar_colaborador(colab_id: int) -> tuple[Response, int]:
+    @app.put("/api/colaboradores/{colab_id}", response_model=ColaboradorResponse)
+    def atualizar_colaborador(colab_id: int, payload: ColaboradorUpdate) -> Any:
         existente = repo.obter_colaborador_por_id(colab_id)
-        if existente is None:
-            return jsonify({"erro": "Colaborador não encontrado"}), 404
+        if not existente:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Colaborador não encontrado")
 
-        dados: dict[str, Any] = request.get_json(silent=True) or {}
-        nome = str(dados.get("nome", existente.nome)).strip()
-        matricula = str(dados.get("matricula", existente.matricula)).strip()
-        tag_uid = str(dados.get("tag_uid", existente.tag_uid)).strip().upper()
-        cargo = str(dados.get("cargo", existente.cargo)).strip()
-        acesso_sala = (
-            bool(dados["acesso_sala"])
-            if "acesso_sala" in dados
-            else existente.acesso_sala
-        )
-        ativo = bool(dados["ativo"]) if "ativo" in dados else existente.ativo
-
-        if not nome or not matricula or not tag_uid or not cargo:
-            return (
-                jsonify({"erro": "Campos obrigatórios não podem ficar vazios"}),
-                400,
-            )
-
+        tag_norm = (payload.tag_uid or existente.tag_uid).strip().upper()
         atualizado_obj = Colaborador(
             id=colab_id,
-            nome=nome,
-            matricula=matricula,
-            tag_uid=tag_uid,
-            cargo=cargo,
-            acesso_sala=acesso_sala,
-            ativo=ativo,
+            nome=(payload.nome or existente.nome).strip(),
+            matricula=(payload.matricula or existente.matricula).strip(),
+            tag_uid=tag_norm,
+            cargo=(payload.cargo or existente.cargo).strip(),
+            acesso_sala=payload.acesso_sala if payload.acesso_sala is not None else existente.acesso_sala,
+            ativo=payload.ativo if payload.ativo is not None else existente.ativo,
         )
         try:
-            resultado = repo.atualizar_colaborador(colab_id, atualizado_obj)
-            if resultado is None:
-                return jsonify({"erro": "Colaborador não encontrado"}), 404
-            return jsonify(resultado.to_dict()), 200
+            res = repo.atualizar_colaborador(colab_id, atualizado_obj)
+            if res is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Colaborador não encontrado")
+            redis_client.invalidar_tag_cache(existente.tag_uid)
+            redis_client.invalidar_tag_cache(tag_norm)
+            # Notifica a Raspberry Pi com a lista atualizada
+            sincronizar_colaboradores_com_pi()
+            return res.to_dict()
         except sqlite3.IntegrityError:
-            return (
-                jsonify({"erro": "Matrícula ou Tag RFID já pertence a outro colaborador."}),
-                400,
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Matrícula ou Tag RFID já pertence a outro colaborador.",
             )
 
-    @app.delete("/api/colaboradores/<int:colab_id>")
-    def remover_colaborador(colab_id: int) -> tuple[Response, int]:
-        removido = repo.excluir_colaborador(colab_id)
-        if not removido:
-            return jsonify({"erro": "Colaborador não encontrado"}), 404
-        return jsonify({"ok": True}), 200
+    @app.delete("/api/colaboradores/{colab_id}")
+    def excluir_colaborador(colab_id: int) -> dict[str, bool]:
+        existente = repo.obter_colaborador_por_id(colab_id)
+        if not existente:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Colaborador não encontrado")
 
-    @app.post("/api/validar")
-    def validar_tag() -> tuple[Response, int]:
-        dados: dict[str, Any] = request.get_json(silent=True) or {}
-        tag_uid = str(dados.get("tag_uid", ""))
-        resposta = service.validar_acesso(tag_uid=tag_uid)
-        return jsonify(resposta.to_dict()), 200
+        sucesso = repo.excluir_colaborador(colab_id)
+        if sucesso:
+            redis_client.invalidar_tag_cache(existente.tag_uid)
+            sincronizar_colaboradores_com_pi()
+        return {"ok": sucesso}
 
-    @app.get("/api/eventos")
-    def listar_eventos() -> Response:
-        todos = request.args.get("todos", "").lower() in ("true", "1", "sim")
-        data_param = request.args.get("data", "").strip()
+    # =========================================================================
+    # ENDPOINTS DE EVENTOS E DASHBOARD (Lidos da base alimentada pelo RabbitMQ)
+    # =========================================================================
 
+    @app.get("/api/dashboard/10min", response_model=Dashboard10MinResponse)
+    def dashboard_10min() -> Any:
+        return service.obter_dashboard_10_minutos()
+
+    @app.get("/api/eventos", response_model=list[EventoResponse])
+    def listar_eventos(todos: bool = False, data: str | None = None) -> Any:
         if todos:
             eventos = repo.listar_eventos(data_prefixo=None)
-        elif data_param:
-            eventos = repo.listar_eventos(data_prefixo=data_param)
+        elif data:
+            eventos = repo.listar_eventos(data_prefixo=data.strip())
         else:
             hoje_str = datetime.now().strftime(FORMATO_DATA)
             eventos = repo.listar_eventos(data_prefixo=hoje_str)
 
-        resp = jsonify([e.to_dict() for e in eventos])
-        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        return resp
+        return [e.to_dict() for e in eventos]
 
     @app.get("/api/eventos.csv")
     def exportar_csv() -> Response:
-        conteudo_csv = service.exportar_eventos_csv()
+        csv_conteudo = service.exportar_eventos_csv()
         return Response(
-            conteudo_csv,
-            mimetype="text/csv; charset=utf-8",
+            content=csv_conteudo,
+            media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": "attachment; filename=eventos.csv"},
         )
+
+    # =========================================================================
+    # SIMULADOR DO FRONT-END (Injeta evento no RabbitMQ simulando a Pi)
+    # =========================================================================
+    @app.post("/api/simular")
+    def simular_leitura_frontend(dados: dict[str, str]) -> dict[str, Any]:
+        """Permite que os botões de simulação da interface web enviem um evento para o RabbitMQ como se fosse a Pi."""
+        tag_uid = str(dados.get("tag_uid", "")).strip().upper()
+        # Valida regra local
+        resposta = service.validar_acesso(tag_uid=tag_uid)
+        return resposta.to_dict()
 
     return app
 
@@ -235,4 +248,5 @@ def create_app(db_path: Path | str | None = None, seed_default: bool = True) -> 
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    import uvicorn
+    uvicorn.run("server.app:app", host="0.0.0.0", port=5000, reload=True)

@@ -98,9 +98,10 @@ function renderizarPresentesNaSala(eventosHoje, colaboradores) {
 
 async function atualizarPainelMonitoramento() {
   try {
-    const [eventos, colaboradores] = await Promise.all([
+    const [eventos, colaboradores, dash10min] = await Promise.all([
       Api.request("/api/eventos"),
       Api.request("/api/colaboradores"),
+      Api.request("/api/dashboard/10min").catch(() => null),
     ]);
 
     const entradas = eventos.filter((e) => e.resultado === "ENTRADA");
@@ -130,7 +131,12 @@ async function atualizarPainelMonitoramento() {
     preencherLista("lista-invasoes", invasoes, "Nenhuma tentativa de invasão hoje.", true);
 
     const agora = new Date();
-    document.getElementById("ultimo-sync").textContent = agora.toLocaleTimeString("pt-BR");
+    const syncElem = document.getElementById("ultimo-sync");
+    if (dash10min && dash10min.fonte === "redis_cache") {
+      syncElem.innerHTML = `${agora.toLocaleTimeString("pt-BR")} <span style="color:#ef4444; font-weight:bold; margin-left:4px;">● Redis Cache (10m)</span>`;
+    } else {
+      syncElem.textContent = agora.toLocaleTimeString("pt-BR");
+    }
   } catch (err) {
     console.error("Erro no polling de monitoramento:", err);
   }
@@ -140,7 +146,7 @@ async function simularTag(tagUid) {
   if (!tagUid) return;
   const banner = document.getElementById("banner-validacao");
   try {
-    const res = await Api.request("/api/validar", {
+    const res = await Api.request("/api/simular", {
       method: "POST",
       body: JSON.stringify({ tag_uid: tagUid }),
     });
