@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login — Controle de Acesso</title>
+  <link rel="stylesheet" href="/static/css/styles.css?v=editorial-v7" />
+</head>
+<body>
+  <div class="login-wrapper">
+    <div class="login-card">
+      <div style="margin-bottom: 2rem;">
+        <div class="ive-brand-lockup" style="margin-bottom: 1.2rem;">
+          <span class="ive-brand-mark">IVE</span>
+          <span class="ive-brand-separator"></span>
+          <span class="ive-brand-text">
+            <span class="ive-brand-subtitle">PRIVATE ACCESS SYSTEM</span>
+            <span class="ive-brand-meta">Segurança Restrita</span>
+          </span>
+        </div>
+        <h1 style="font-size: 1.75rem; font-weight: 400; line-height: 1.2;">Controle de Acesso</h1>
+        <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0.25rem;">
+          Sala Restrita de Design
+        </p>
+      </div>
+
+      <div id="login-erro" style="display: none; background: var(--wine); color: var(--text-main); border: 1px solid var(--red-highlight); padding: 0.65rem 0.85rem; border-radius: var(--radius-sm); font-size: 0.82rem; margin-bottom: 1.2rem;"></div>
+
+      <form id="form-login">
+        <div class="form-group">
+          <label for="usuario">Usuário</label>
+          <input type="text" id="usuario" name="usuario" placeholder="admin" value="admin" required autocomplete="username" />
+        </div>
+        <div class="form-group" style="margin-bottom: 1.5rem;">
+          <label for="senha">Senha</label>
+          <input type="password" id="senha" name="senha" placeholder="••••••••" value="admin" required autocomplete="current-password" />
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">
+          Entrar no Painel
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("form-login");
+    const boxErro = document.getElementById("login-erro");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      boxErro.style.display = "none";
+      const usuario = document.getElementById("usuario").value.trim();
+      const senha = document.getElementById("senha").value.trim();
+
+      try {
+        const res = await fetch("/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ usuario, senha }),
+        });
+        if (res.ok) {
+          window.location.href = "/monitor";
+        } else {
+          const data = await res.json().catch(() => ({}));
+          boxErro.textContent = data.erro || "Usuário ou senha inválidos.";
+          boxErro.style.display = "block";
+        }
+      } catch (err) {
+        boxErro.textContent = "Falha de comunicação com o servidor.";
+        boxErro.style.display = "block";
+      }
+    });
+  </script>
+</body>
+</html>

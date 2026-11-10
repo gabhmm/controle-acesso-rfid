@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monitoramento &amp; Presença — IVE Security</title>
+  <link rel="stylesheet" href="/static/css/styles.css?v=editorial-v7" />
+</head>
+
+<body>
+  <nav class="navbar">
+    <a href="/monitor" class="navbar-brand ive-brand-lockup">
+      <span class="ive-brand-mark">IVE</span>
+      <span class="ive-brand-separator"></span>
+      <span class="ive-brand-text">
+        <span class="ive-brand-subtitle">PRIVATE SECURITY</span>
+        <span class="ive-brand-meta">Access Control</span>
+      </span>
+    </a>
+    <div class="navbar-links">
+      <span class="sync-badge">
+        <span class="status-dot"></span> <span id="ultimo-sync">--:--:--</span>
+      </span>
+      <a href="/monitor" class="nav-link active">Monitoramento</a>
+      <a href="/colaboradores" class="nav-link">Colaboradores &amp; Tags</a>
+      <a href="/api/eventos.csv" class="btn btn-secondary btn-sm">Exportar CSV</a>
+      <button onclick="Api.logout()" class="btn btn-danger btn-sm">Sair</button>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-header">
+      <h1>Monitoramento &amp; Presença</h1>
+      <span class="page-header-meta">Controle de acesso · Sala restrita</span>
+    </div>
+
+    <div class="simulator-bar">
+      <div style="display: flex; align-items: center; gap: 0.6rem;">
+        <span style="font-size: 0.78rem; font-weight: 600; color: var(--text-main);">Simulador RFID</span>
+        <code class="mono" style="font-size: 0.7rem;">POST /api/validar</code>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;">
+        <button class="btn btn-secondary btn-sm" onclick="simularTag('A1B2C3D4')">Ana (A1B2C3D4)</button>
+        <button class="btn btn-secondary btn-sm" onclick="simularTag('B2C3D4E5')">Bruno (B2C3D4E5)</button>
+        <button class="btn btn-secondary btn-sm" onclick="simularTag('C3D4E5F6')">Carlos (C3D4E5F6)</button>
+        <button class="btn btn-danger btn-sm" onclick="simularTag('FF998877')">Invasão (FF998877)</button>
+        <form id="form-simular" style="display: inline-flex; gap: 0.35rem; align-items: center;">
+          <input type="text" id="input-tag-simular" placeholder="Tag UID..." style="width: 100px; padding: 0.28rem 0.6rem; font-size: 0.76rem;" />
+          <button type="submit" class="btn btn-primary btn-sm">Validar</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="banner-validacao" style="display: none; margin-bottom: 1.2rem; padding: 0.7rem 1.1rem; border-radius: var(--radius-sm); font-size: 0.85rem;"></div>
+
+    <div class="kpi-editorial-hero">
+      <div class="kpi-card-hero">
+        <span class="kpi-label">Presentes na sala</span>
+        <div class="kpi-hero-body">
+          <span id="kpi-na-sala" class="kpi-value-hero">0</span>
+          <span class="kpi-hero-caption">colaboradores</span>
+        </div>
+      </div>
+
+      <div class="kpi-secondary-grid">
+        <div class="kpi-card-mini">
+          <span class="kpi-label">Entradas hoje</span>
+          <span id="kpi-entradas" class="kpi-value">0</span>
+        </div>
+        <div class="kpi-card-mini">
+          <span class="kpi-label">Saídas hoje</span>
+          <span id="kpi-saidas" class="kpi-value">0</span>
+        </div>
+        <div class="kpi-card-mini">
+          <span class="kpi-label">Acessos negados</span>
+          <span id="kpi-negados" class="kpi-value">0</span>
+        </div>
+        <div class="kpi-card-mini">
+          <span class="kpi-label">Invasões</span>
+          <span id="kpi-invasoes" class="kpi-value">0</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="monitor-top-grid">
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">Presentes na Sala</h2>
+          <span id="badge-count-sala" class="badge badge-ENTRADA">0 presentes</span>
+        </div>
+        <div id="lista-na-sala" class="occupant-grid">
+          <div class="empty-state">Sala vazia no momento.</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">Alertas de Segurança</h2>
+          <span id="badge-count-alertas" class="badge badge-INVASAO" style="animation: none;">0 alertas</span>
+        </div>
+        <ul id="lista-alertas" class="event-list">
+          <li class="empty-state">Nenhum alerta registrado hoje.</li>
+        </ul>
+      </section>
+    </div>
+
+    <div class="monitor-quad-grid">
+      <section class="card">
+        <div class="card-header">
+          <h3 class="card-title">Últimas Entradas</h3>
+          <span class="badge badge-ENTRADA">Entrada</span>
+        </div>
+        <ul id="lista-entradas" class="event-list">
+          <li class="empty-state">Nenhum registro hoje.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <h3 class="card-title">Últimas Saídas</h3>
+          <span class="badge badge-SAIDA">Saída</span>
+        </div>
+        <ul id="lista-saidas" class="event-list">
+          <li class="empty-state">Nenhum registro hoje.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <h3 class="card-title">Tentativas Negadas</h3>
+          <span class="badge badge-NEGADO">Negado</span>
+        </div>
+        <ul id="lista-negados" class="event-list">
+          <li class="empty-state">Nenhum registro hoje.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <h3 class="card-title">Tentativas de Invasão</h3>
+          <span class="badge badge-INVASAO">Invasão</span>
+        </div>
+        <ul id="lista-invasoes" class="event-list">
+          <li class="empty-state">Nenhum registro hoje.</li>
+        </ul>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/monitor.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Colaboradores &amp; Permissões — IVE Security</title>
+  <link rel="stylesheet" href="/static/css/styles.css?v=editorial-v7" />
+</head>
+<body>
+  <nav class="navbar">
+    <a href="/monitor" class="navbar-brand ive-brand-lockup">
+      <span class="ive-brand-mark">IVE</span>
+      <span class="ive-brand-separator"></span>
+      <span class="ive-brand-text">
+        <span class="ive-brand-subtitle">PRIVATE SECURITY</span>
+        <span class="ive-brand-meta">Access Control</span>
+      </span>
+    </a>
+    <div class="navbar-links">
+      <a href="/monitor" class="nav-link">Monitoramento</a>
+      <a href="/colaboradores" class="nav-link active">Colaboradores &amp; Tags</a>
+      <a href="/api/eventos.csv" class="btn btn-secondary btn-sm">Exportar CSV</a>
+      <button onclick="Api.logout()" class="btn btn-danger btn-sm">Sair</button>
+    </div>
+  </nav>
+
+  <main class="container">
+    <div class="page-header">
+      <h1>Colaboradores &amp; Credenciais</h1>
+      <span class="page-header-meta">Sincronização automática · Intervalo 3 min</span>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h2 class="card-title">Gerenciamento de Tags &amp; Permissões</h2>
+          <p style="color: var(--text-muted); font-size: 0.82rem; margin-top: 0.25rem;">
+            A Raspberry Pi sincroniza esta relação ao iniciar e periodicamente via <code class="mono">GET /api/colaboradores</code>.
+          </p>
+        </div>
+        <button class="btn btn-primary" onclick="abrirModalNovo()">+ Novo Colaborador</button>
+      </div>
+
+      <div id="msg-feedback" style="display: none; margin-bottom: 1.2rem; padding: 0.85rem 1.2rem; border-radius: var(--radius-sm); font-size: 0.88rem;"></div>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Colaborador</th>
+              <th>Matrícula</th>
+              <th>Cargo / Função</th>
+              <th>Tag RFID (UID)</th>
+              <th>Permissão Sala</th>
+              <th>Status</th>
+              <th>Presença Hoje</th>
+              <th>Tempo Diário</th>
+              <th style="text-align: right;">Ações</th>
+            </tr>
+          </thead>
+          <tbody id="tabela-colaboradores">
+            <tr>
+              <td colspan="10" class="empty-state">Carregando lista de credenciais...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <div id="modal-colab" class="modal-backdrop">
+    <div class="modal-content">
+      <div class="card-header">
+        <h3 id="modal-titulo" class="card-title">Novo Colaborador</h3>
+        <button class="btn btn-secondary btn-sm btn-icon" onclick="fecharModal()">✕</button>
+      </div>
+
+      <form id="form-colab">
+        <input type="hidden" id="colab-id" />
+
+        <div class="form-group">
+          <label for="colab-nome">Nome Completo</label>
+          <input type="text" id="colab-nome" placeholder="Ex: Ana Silva" required />
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div class="form-group">
+            <label for="colab-matricula">Matrícula / ID</label>
+            <input type="text" id="colab-matricula" placeholder="Ex: 01" required />
+          </div>
+          <div class="form-group">
+            <label for="colab-tag">Tag RFID (UID)</label>
+            <input type="text" id="colab-tag" placeholder="Ex: A1B2C3D4" required style="text-transform: uppercase;" />
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="colab-cargo">Função / Cargo</label>
+          <input type="text" id="colab-cargo" placeholder="Ex: Character Artist" required />
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0;">
+          <label class="checkbox-label">
+            <input type="checkbox" id="colab-acesso" checked />
+            <span>Autorizado na Sala</span>
+          </label>
+
+          <label class="checkbox-label">
+            <input type="checkbox" id="colab-ativo" checked />
+            <span>Colaborador Ativo</span>
+          </label>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
+          <button type="button" class="btn btn-secondary" onclick="fecharModal()">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Salvar Credencial</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/colaboradores.js"></script>
+</body>
+</html>

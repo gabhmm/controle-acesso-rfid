@@ -1,0 +1,16 @@
+# ✅ Tasks (Plano de Execução)
+
+## Fase 1: Setup e Modelagem
+- [ ] Task 1.1: ...
+
+## Fase 2: Backend (Server)
+- [ ] Task 2.1: ...
+
+## Fase 3: Frontend Web
+- [ ] Task 3.1: ...
+
+## Fase 4: Cliente Raspberry Pi & Modo Offline
+- [ ] Task 4.1: ...
+
+## Fase 5: Testes e Validação Final
+- [ ] Task 5.1: ...
