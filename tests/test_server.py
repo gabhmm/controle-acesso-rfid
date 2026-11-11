@@ -160,15 +160,41 @@ class TestControleAcessoContratoRabbitMQ(unittest.TestCase):
         self.assertEqual(enviado["colaboradores"][0]["tag_uid"], "A1B2C3D4")
 
     def test_05_decisao_autonoma_na_raspberry_pi(self) -> None:
-        """Testa a Pi decidindo o acesso: busca o colaborador (Redis -> banco) e aplica as regras."""
-        self.repo.criar_colaborador(
-            Colaborador(id=None, nome="Ana", matricula="01", tag_uid="A1B2C3D4", cargo="Artist")
-        )
-        self.repo.criar_colaborador(
-            Colaborador(id=None, nome="Carlos", matricula="02", tag_uid="C3D4E5F6", cargo="Sound", acesso_sala=False)
-        )
-        pi = RaspberryPiClient(dispositivo="sala-aaa", repo=self.repo, redis=self.redis)
-        pi.estado_local.clear()
+        """Testa a Pi decidindo o acesso sozinha, só com a lista recebida do servidor pela fila."""
+        pi = RaspberryPiClient(dispositivo="sala-aaa", pasta_dados=self.temp_dir.name)
+
+        # Sem lista recebida, todo cartão é INVASAO
+        self.assertEqual(pi.decidir_acesso("A1B2C3D4")["resultado"], "INVASAO")
+
+        class MockChannel:
+            acks = 0
+            nacks = 0
+            def basic_ack(self, delivery_tag: int) -> None:
+                self.acks += 1
+            def basic_nack(self, delivery_tag: int, requeue: bool = False) -> None:
+                self.nacks += 1
+
+        class MockMethod:
+            delivery_tag = 1
+
+        # Mensagem no formato que o servidor publica (Servidor -> Pi)
+        self.rabbit.publicar_colaboradores([
+            {"id": 1, "nome": "Ana", "tag_uid": "A1B2C3D4", "acesso_sala": True, "ativo": True},
+            {"id": 2, "nome": "Carlos", "tag_uid": "C3D4E5F6", "acesso_sala": False, "ativo": True},
+        ])
+        canal = MockChannel()
+        corpo = json.dumps(self.rabbit.fila_memoria[-1]).encode("utf-8")
+        pi._receber_lista(canal, MockMethod(), None, corpo)
+        self.assertEqual(canal.acks, 1)
+
+        # Mensagem fora do contrato é descartada e não apaga a lista atual
+        pi._receber_lista(canal, MockMethod(), None, json.dumps({"versao": 2}).encode("utf-8"))
+        self.assertEqual(canal.nacks, 1)
+        self.assertEqual(len(pi.colaboradores_cache), 2)
+
+        # A lista sobrevive a um reinício da Pi (cache.json)
+        pi = RaspberryPiClient(dispositivo="sala-aaa", pasta_dados=self.temp_dir.name)
+        self.assertEqual(len(pi.colaboradores_cache), 2)
 
         # 1. Ana (autorizada) -> ENTRADA
         ev1 = pi.decidir_acesso("A1B2C3D4")

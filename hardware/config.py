@@ -1,7 +1,6 @@
 # Configuração do sistema embarcado (pinos em numeração GPIO/BCM).
 
 DEBOUNCE_SEGUNDOS = 3
-TTL_CARTAO_SEGUNDOS = 300
 
 PINO_LED_VERMELHO = 17
 PINO_LED_VERDE = 27

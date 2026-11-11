@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -11,8 +12,9 @@ from typing import Any
 import pika
 
 from hardware import config
+
+# A Pi só fala com o servidor pelo RabbitMQ: daqui vêm apenas os dados de conexão.
 from server.config import (
-    DB_PATH,
     RABBITMQ_DISPOSITIVO,
     RABBITMQ_EXCHANGE,
     RABBITMQ_HOST,
@@ -21,8 +23,6 @@ from server.config import (
     RABBITMQ_USER,
     RABBITMQ_VHOST,
 )
-from server.database import DatabaseRepository
-from server.redis_client import RedisClient, redis_client
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,8 +32,6 @@ logger = logging.getLogger("rfid.hardware")
 logging.getLogger("pika").setLevel(logging.CRITICAL)
 
 BASE_DIR = Path(__file__).resolve().parent
-ESTADO_FILE = BASE_DIR / "estado.json"
-PENDENTES_FILE = BASE_DIR / "pendentes.jsonl"
 
 MSG_INVASAO = "Acesso negado, tag não cadastrada"
 
@@ -56,7 +54,12 @@ CORES_SIMULADOR = {
 
 
 class RaspberryPiClient:
-    """Sistema embarcado: lê o cartão, decide, sinaliza e publica o evento no RabbitMQ."""
+    """Sistema embarcado: lê o cartão, decide sozinho, sinaliza e publica o evento no RabbitMQ.
+
+    A Pi não acessa o banco nem o Redis do servidor. A lista de colaboradores chega
+    pela fila 'pi.<dispositivo>.colaboradores' e fica guardada em cache.json, então a
+    porta continua funcionando mesmo com o servidor fora do ar.
+    """
 
     def __init__(
         self,
@@ -66,8 +69,7 @@ class RaspberryPiClient:
         user: str = RABBITMQ_USER,
         password: str = RABBITMQ_PASS,
         vhost: str = RABBITMQ_VHOST,
-        repo: DatabaseRepository | None = None,
-        redis: RedisClient | None = None,
+        pasta_dados: Path | str = BASE_DIR,
     ) -> None:
         self.dispositivo = dispositivo
         self.host = host
@@ -76,51 +78,101 @@ class RaspberryPiClient:
         self.password = password
         self.vhost = vhost
         self.routing_key_evento = f"evento.{self.dispositivo}"
+        self.fila_colaboradores = f"pi.{self.dispositivo}.colaboradores"
         self.is_real = HARDWARE_REAL
-        self.repo = repo or DatabaseRepository(db_path=DB_PATH)
-        self.redis = redis or redis_client
-        self.estado_local: dict[str, Any] = {}
-        self.ultima_origem = ""  # de onde veio o colaborador na última leitura: REDIS ou BANCO
 
-        if ESTADO_FILE.exists():
-            try:
-                with open(ESTADO_FILE, "r", encoding="utf-8") as f:
-                    self.estado_local = json.load(f)
-            except Exception:
-                self.estado_local = {}
+        pasta = Path(pasta_dados)
+        self.cache_file = pasta / "cache.json"
+        self.estado_file = pasta / "estado.json"
+        self.pendentes_file = pasta / "pendentes.jsonl"
+
+        self.colaboradores_cache: list[dict[str, Any]] = self._ler_json(self.cache_file).get("colaboradores", [])
+        self.estado_local: dict[str, Any] = self._ler_json(self.estado_file)
 
         if self.is_real:
             logger.info("Leitor RC522, LED RGB e buzzer inicializados.")
         else:
             logger.info("Sem hardware (%s). Usando o simulador de teclado.", MOTIVO_SEM_HARDWARE)
 
+        if self.colaboradores_cache:
+            logger.info("cache.json carregado (%d colaboradores).", len(self.colaboradores_cache))
+        else:
+            logger.warning("Sem cache.json: todo cartão será INVASAO até o servidor enviar a lista.")
+
+    @staticmethod
+    def _ler_json(arquivo: Path) -> dict[str, Any]:
+        try:
+            with open(arquivo, "r", encoding="utf-8") as f:
+                dados = json.load(f)
+            return dados if isinstance(dados, dict) else {}
+        except Exception:
+            return {}
+
     def _salvar_estado(self) -> None:
-        with open(ESTADO_FILE, "w", encoding="utf-8") as f:
+        with open(self.estado_file, "w", encoding="utf-8") as f:
             json.dump(self.estado_local, f, ensure_ascii=False, indent=2)
 
     # -------------------------------------------------------------------------
-    # CARTÃO → COLABORADOR (cache-aside: Redis primeiro, banco se não achar)
+    # LISTA DE COLABORADORES (servidor → fila → cache.json)
     # -------------------------------------------------------------------------
 
-    def buscar_colaborador(self, tag_norm: str) -> tuple[dict[str, Any] | None, str]:
-        """Devolve (colaborador, origem). origem é "REDIS" ou "BANCO"."""
-        # Sem Redis, vai direto ao banco: a porta continua funcionando, só sem cache.
-        usar_redis = self.redis.disponivel
+    def atualizar_cache(self, dados: dict[str, Any]) -> None:
+        """Guarda a lista recebida do servidor em cache.json e passa a usá-la."""
+        # Escrita atômica: uma queda de energia no meio não corrompe o cache.
+        temp_file = self.cache_file.with_suffix(".tmp")
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(dados, f, ensure_ascii=False, indent=2)
+        temp_file.replace(self.cache_file)
+        self.colaboradores_cache = dados.get("colaboradores", [])
+        logger.info("Lista recebida do servidor (%d colaboradores).", len(self.colaboradores_cache))
 
-        if usar_redis:
-            em_cache = self.redis.obter_tag_cache(tag_norm)
-            if em_cache is not None:
-                return em_cache, "REDIS"
+    def _receber_lista(self, ch: Any, method: Any, properties: Any, body: bytes) -> None:
+        try:
+            dados = json.loads(body.decode("utf-8"))
+            if dados.get("versao") != 1 or not isinstance(dados.get("colaboradores"), list):
+                raise ValueError("mensagem fora do contrato v1")
+            self.atualizar_cache(dados)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+        except Exception as exc:
+            logger.warning("Lista de colaboradores descartada (%s).", exc)
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
-        encontrado = self.repo.obter_colaborador_por_tag(tag_norm)
-        if encontrado is None:
-            return None, "BANCO"
+    def _consumir_colaboradores(self) -> None:
+        """Escuta a fila de colaboradores para sempre; reconecta se o RabbitMQ cair."""
+        while True:
+            try:
+                parameters = pika.ConnectionParameters(
+                    host=self.host,
+                    port=self.port,
+                    virtual_host=self.vhost,
+                    credentials=pika.PlainCredentials(self.user, self.password),
+                    socket_timeout=10.0,
+                )
+                with pika.BlockingConnection(parameters) as connection:
+                    channel = connection.channel()
+                    # Mesma declaração do servidor (server/rabbit_producer.py).
+                    channel.queue_declare(
+                        queue=self.fila_colaboradores,
+                        durable=True,
+                        arguments={"x-max-length": 1},
+                    )
+                    channel.basic_consume(
+                        queue=self.fila_colaboradores,
+                        on_message_callback=self._receber_lista,
+                    )
+                    channel.start_consuming()
+            except Exception as exc:
+                logger.debug("Fila de colaboradores indisponível (%s). Nova tentativa em 5s.", exc)
+                time.sleep(5)
 
-        colab = encontrado.to_dict()
-        if usar_redis:
-            # A API apaga esta chave quando o colaborador é editado ou excluído.
-            self.redis.salvar_tag_cache(tag_norm, colab, ttl_segundos=config.TTL_CARTAO_SEGUNDOS)
-        return colab, "BANCO"
+    def iniciar_sincronizacao(self) -> None:
+        threading.Thread(target=self._consumir_colaboradores, daemon=True).start()
+
+    def buscar_colaborador(self, tag_norm: str) -> dict[str, Any] | None:
+        for colab in self.colaboradores_cache:
+            if str(colab.get("tag_uid", "")).upper() == tag_norm:
+                return colab
+        return None
 
     # -------------------------------------------------------------------------
     # DECISÃO DO ACESSO
@@ -128,7 +180,7 @@ class RaspberryPiClient:
 
     def decidir_acesso(self, tag_uid: str) -> dict[str, Any]:
         tag_norm = tag_uid.strip().upper()
-        colab, self.ultima_origem = self.buscar_colaborador(tag_norm)
+        colab = self.buscar_colaborador(tag_norm)
 
         def evento(resultado: str, mensagem: str) -> dict[str, Any]:
             return {
@@ -179,7 +231,7 @@ class RaspberryPiClient:
 
     def sinalizar(self, evento: dict[str, Any]) -> None:
         resultado = evento["resultado"]
-        logger.info("[%s] %s %s: %s", self.ultima_origem, evento["tag_uid"], resultado, evento["mensagem"])
+        logger.info("%s %s: %s", evento["tag_uid"], resultado, evento["mensagem"])
         if self.is_real:
             atuadores.sinalizar(resultado)
         else:
@@ -190,7 +242,7 @@ class RaspberryPiClient:
     # -------------------------------------------------------------------------
 
     def _salvar_pendente(self, evento: dict[str, Any]) -> None:
-        with open(PENDENTES_FILE, "a", encoding="utf-8") as f:
+        with open(self.pendentes_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(evento, ensure_ascii=False) + "\n")
         logger.info("RabbitMQ indisponível. Evento salvo em 'pendentes.jsonl' para envio posterior.")
 
@@ -238,10 +290,10 @@ class RaspberryPiClient:
         return evento
 
     def _reenviar_pendentes_se_houver(self) -> None:
-        if not PENDENTES_FILE.exists():
+        if not self.pendentes_file.exists():
             return
         try:
-            with open(PENDENTES_FILE, "r", encoding="utf-8") as f:
+            with open(self.pendentes_file, "r", encoding="utf-8") as f:
                 linhas = [l.strip() for l in f if l.strip()]
             if not linhas:
                 return
@@ -255,11 +307,11 @@ class RaspberryPiClient:
                     restantes.append(linha)
 
             if restantes:
-                with open(PENDENTES_FILE, "w", encoding="utf-8") as f:
+                with open(self.pendentes_file, "w", encoding="utf-8") as f:
                     for r in restantes:
                         f.write(r + "\n")
             else:
-                PENDENTES_FILE.unlink(missing_ok=True)
+                self.pendentes_file.unlink(missing_ok=True)
         except Exception as exc:
             logger.error("Erro ao reenviar pendentes: %s", exc)
 
@@ -268,6 +320,7 @@ class RaspberryPiClient:
     # -------------------------------------------------------------------------
 
     def loop_leitura_continua(self) -> None:
+        self.iniciar_sincronizacao()
         logger.info("Loop de leitura ativo (Dispositivo: %s)...", self.dispositivo)
         if self.is_real:
             self._loop_rc522()

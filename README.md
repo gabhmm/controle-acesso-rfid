@@ -27,6 +27,7 @@ flowchart TD
 
     subgraph Mensageria_RabbitMQ ["🐇 RabbitMQ (Mensageria)"]
         Queue["📬 Exchange acesso → Fila Durável: servidor.eventos"]
+        QueuePi["📬 Fila pi.sala-aaa.colaboradores (só a lista mais recente)"]
     end
 
     subgraph Background_Worker ["⚙️ Worker Consumidor (worker/consumer.py)"]
@@ -43,8 +44,8 @@ flowchart TD
     end
 
     RC522 -->|1. Tag lida| Porta
-    Porta -->|2. Consulta Cache-Aside| R_Tag
-    Porta -.->|Cache Miss: busca e guarda no Redis| DB
+    API -->|Lista de colaboradores ao iniciar e a cada alteração| QueuePi
+    QueuePi -->|2. Lista guardada em hardware/cache.json| Porta
     Porta -->|3. Sinaliza na hora| LED
     Porta -->|3. Sinaliza na hora| BUZZ
     Porta -->|4. Publicação Assíncrona| Queue
@@ -148,7 +149,7 @@ python -m unittest tests.test_server -v
 
 ## 📜 5. Resumo das Rotas da API REST (`/docs`)
 
-A validação do cartão não é uma rota: acontece dentro da porta (`hardware/rfid_reader.py`), que consulta o Redis (cache-aside, chave `rfid:tag:{uid}`, TTL 300 s), busca no SQLite quando o cartão não está no cache e publica o evento no RabbitMQ.
+A validação do cartão não é uma rota: acontece dentro da porta (`hardware/rfid_reader.py`). A Pi não acessa o banco nem o Redis do servidor: recebe a lista de colaboradores pela fila `pi.<dispositivo>.colaboradores`, guarda em `hardware/cache.json`, decide sozinha e publica o evento no RabbitMQ. Enquanto nunca tiver recebido a lista, todo cartão é `INVASAO`.
 
 | Método | Rota | Descrição |
 | :--- | :--- | :--- |
