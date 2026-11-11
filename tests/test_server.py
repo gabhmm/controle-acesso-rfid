@@ -160,13 +160,14 @@ class TestControleAcessoContratoRabbitMQ(unittest.TestCase):
         self.assertEqual(enviado["colaboradores"][0]["tag_uid"], "A1B2C3D4")
 
     def test_05_decisao_autonoma_na_raspberry_pi(self) -> None:
-        """Testa a Pi decidindo o acesso localmente usando seu cache.json e regras."""
-        pi = RaspberryPiClient(dispositivo="sala-aaa")
-        # Simula cache recebido da Pi
-        pi.colaboradores_cache = [
-            {"id": 1, "nome": "Ana", "tag_uid": "A1B2C3D4", "acesso_sala": True, "ativo": True},
-            {"id": 2, "nome": "Carlos", "tag_uid": "C3D4E5F6", "acesso_sala": False, "ativo": True},
-        ]
+        """Testa a Pi decidindo o acesso: busca o colaborador (Redis -> banco) e aplica as regras."""
+        self.repo.criar_colaborador(
+            Colaborador(id=None, nome="Ana", matricula="01", tag_uid="A1B2C3D4", cargo="Artist")
+        )
+        self.repo.criar_colaborador(
+            Colaborador(id=None, nome="Carlos", matricula="02", tag_uid="C3D4E5F6", cargo="Sound", acesso_sala=False)
+        )
+        pi = RaspberryPiClient(dispositivo="sala-aaa", repo=self.repo, redis=self.redis)
         pi.estado_local.clear()
 
         # 1. Ana (autorizada) -> ENTRADA
