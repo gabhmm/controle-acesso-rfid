@@ -147,14 +147,14 @@ sudo raspi-config nonint do_spi 0          # habilita o SPI (reinicie depois)
 cd embarcado
 python3 -m venv --system-site-packages venv && source venv/bin/activate
 pip install -r requirements.txt mfrc522
-RABBITMQ_HOST=<ip-do-servidor> RABBITMQ_USER=pi RABBITMQ_PASS=<senha> python -m hardware.rfid_reader
+python -m hardware.rfid_reader
 ```
 
 `--system-site-packages` aproveita o `gpiozero` e o `RPi.GPIO` que já vêm no Raspberry Pi OS. A Pi não precisa de Redis, RabbitMQ nem do código do servidor.
 
 `python -m hardware.leitor` mostra o UID de cada cartão (cadastre a tag exatamente como aparece) e `python -m hardware.atuadores` testa as quatro sinalizações.
 
-Fora da Raspberry, o mesmo comando abre o **simulador**: você digita a tag no terminal e o LED e o buzzer viram texto. Com o servidor na mesma máquina, as variáveis de ambiente não são necessárias.
+Fora da Raspberry, o mesmo comando abre o **simulador**: você digita a tag no terminal e o LED e o buzzer viram texto. Com o servidor na mesma máquina, não é preciso mudar nada no `config.py`.
 
 ### Conectando pela rede
 
@@ -165,7 +165,7 @@ sudo rabbitmqctl add_user pi <senha>
 sudo rabbitmqctl set_permissions -p / pi ".*" ".*" ".*"
 ```
 
-Variáveis lidas pela Pi: `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASS`, `RABBITMQ_VHOST` e `DISPOSITIVO` (padrão `sala-aaa`, precisa ser o mesmo do servidor).
+Na Pi, edite [`embarcado/hardware/config.py`](embarcado/hardware/config.py): `RABBITMQ_HOST` com o IP do servidor, `RABBITMQ_USER` e `RABBITMQ_PASS` com o usuário criado acima. `DISPOSITIVO` (padrão `sala-aaa`) precisa ser o mesmo do servidor.
 
 > Servidor rodando no WSL2: a Pi não alcança a rede interna do WSL. Ative `networkingMode=mirrored` no `.wslconfig` ou encaminhe a porta com `netsh interface portproxy`.
 

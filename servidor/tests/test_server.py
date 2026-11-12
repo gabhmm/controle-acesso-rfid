@@ -143,6 +143,52 @@ class TestControleAcessoContratoRabbitMQ(unittest.TestCase):
         consumer.processar_mensagem(canal, MockMethod(), None, json.dumps(msg_invalida).encode("utf-8"))
         self.assertEqual(canal.nacks, 1)
 
+    def test_03b_worker_falha_do_banco_devolve_evento_a_fila(self) -> None:
+        """Falha do banco não pode descartar o evento: ele volta para a fila. Dado inválido é descartado."""
+        import sqlite3
+        import worker.consumer as modulo_consumer
+
+        modulo_consumer.PAUSA_FALHA_BANCO_SEGUNDOS = 0
+        consumer = EventConsumer(db_path=self.db_path)
+
+        class CanalComRequeue:
+            def __init__(self) -> None:
+                self.nacks: list[bool] = []
+            def basic_ack(self, delivery_tag: int) -> None:
+                raise AssertionError("não deveria dar ack")
+            def basic_nack(self, delivery_tag: int, requeue: bool = False) -> None:
+                self.nacks.append(requeue)
+
+        class MockMethod:
+            delivery_tag = 1
+
+        evento = {
+            "versao": 1, "evento_id": str(uuid.uuid4()), "dispositivo": "sala-aaa",
+            "data_hora": "2026-11-06T20:15:02-03:00", "tag_uid": "A1B2C3D4",
+            "colaborador_id": 1, "nome": "Ana", "resultado": "ENTRADA", "mensagem": "Bem-vindo, Ana",
+        }
+
+        # Banco fora do ar / schema antigo -> requeue=True
+        def falha_banco(*args, **kwargs):
+            raise sqlite3.OperationalError("table eventos has no column named colaborador_id")
+
+        consumer.repo.registrar_evento = falha_banco
+        canal = CanalComRequeue()
+        consumer.processar_mensagem(canal, MockMethod(), None, json.dumps(evento).encode("utf-8"))
+        self.assertEqual(canal.nacks, [True])
+
+        # Resultado fora da lista (CHECK do banco) -> descarta
+        consumer = EventConsumer(db_path=self.db_path)
+        canal = CanalComRequeue()
+        invalido = dict(evento, evento_id=str(uuid.uuid4()), resultado="QUALQUER")
+        consumer.processar_mensagem(canal, MockMethod(), None, json.dumps(invalido).encode("utf-8"))
+        self.assertEqual(canal.nacks, [False])
+
+        # JSON malformado -> descarta
+        canal = CanalComRequeue()
+        consumer.processar_mensagem(canal, MockMethod(), None, b"{nao e json")
+        self.assertEqual(canal.nacks, [False])
+
     def test_04_publicacao_colaboradores_servidor_para_pi(self) -> None:
         """Testa o envio de lista de colaboradores (Servidor -> Pi) conforme Página 3 do PDF."""
         colabs = [

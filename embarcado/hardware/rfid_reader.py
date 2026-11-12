@@ -74,6 +74,8 @@ class RaspberryPiClient:
         self.cache_file = pasta / "cache.json"
         self.estado_file = pasta / "estado.json"
         self.pendentes_file = pasta / "pendentes.jsonl"
+        # Protege pendentes.jsonl: o loop de leitura grava e a thread de reenvio reescreve.
+        self._trava_pendentes = threading.Lock()
 
         self.colaboradores_cache: list[dict[str, Any]] = self._ler_json(self.cache_file).get("colaboradores", [])
         self.estado_local: dict[str, Any] = self._ler_json(self.estado_file)
@@ -154,6 +156,7 @@ class RaspberryPiClient:
 
     def iniciar_sincronizacao(self) -> None:
         threading.Thread(target=self._consumir_colaboradores, daemon=True).start()
+        threading.Thread(target=self._reenviar_pendentes_periodicamente, daemon=True).start()
 
     def buscar_colaborador(self, tag_norm: str) -> dict[str, Any] | None:
         for colab in self.colaboradores_cache:
@@ -229,9 +232,17 @@ class RaspberryPiClient:
     # -------------------------------------------------------------------------
 
     def _salvar_pendente(self, evento: dict[str, Any]) -> None:
-        with open(self.pendentes_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(evento, ensure_ascii=False) + "\n")
+        with self._trava_pendentes:
+            with open(self.pendentes_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(evento, ensure_ascii=False) + "\n")
         logger.info("RabbitMQ indisponível. Evento salvo em 'pendentes.jsonl' para envio posterior.")
+
+    def _ler_pendentes(self) -> list[str]:
+        try:
+            with open(self.pendentes_file, "r", encoding="utf-8") as f:
+                return [l.strip() for l in f if l.strip()]
+        except FileNotFoundError:
+            return []
 
     def _enviar_evento_ao_broker(self, evento: dict[str, Any]) -> bool:
         try:
@@ -277,30 +288,57 @@ class RaspberryPiClient:
         return evento
 
     def _reenviar_pendentes_se_houver(self) -> None:
-        if not self.pendentes_file.exists():
+        """Reenvia os eventos guardados em pendentes.jsonl, na ordem em que aconteceram.
+
+        Roda tanto depois de uma publicação bem-sucedida quanto periodicamente em
+        segundo plano. Se os dois rodarem juntos, um evento pode ser enviado duas
+        vezes, o que é inofensivo: o servidor ignora evento_id repetido.
+        """
+        # A trava só cobre o acesso ao arquivo, não o envio pela rede, para não
+        # segurar a leitura do próximo cartão enquanto o broker responde.
+        with self._trava_pendentes:
+            linhas = self._ler_pendentes()
+        if not linhas:
+            return
+
+        resolvidas: set[str] = set()
+        for linha in linhas:
+            try:
+                ev = json.loads(linha)
+            except json.JSONDecodeError:
+                logger.error("Linha corrompida em pendentes.jsonl descartada: %s", linha[:80])
+                resolvidas.add(linha)
+                continue
+            if not self._enviar_evento_ao_broker(ev):
+                # Broker fora: para aqui e tenta tudo de novo depois, mantendo a ordem.
+                break
+            logger.info("Pendente reenviado com sucesso: %s", ev.get("evento_id"))
+            resolvidas.add(linha)
+
+        if not resolvidas:
             return
         try:
-            with open(self.pendentes_file, "r", encoding="utf-8") as f:
-                linhas = [l.strip() for l in f if l.strip()]
-            if not linhas:
-                return
-
-            restantes = []
-            for linha in linhas:
-                ev = json.loads(linha)
-                if self._enviar_evento_ao_broker(ev):
-                    logger.info("Pendente reenviado com sucesso: %s", ev.get("evento_id"))
+            with self._trava_pendentes:
+                # Relê o arquivo: eventos novos podem ter sido gravados durante o envio.
+                restantes = [l for l in self._ler_pendentes() if l not in resolvidas]
+                if restantes:
+                    temp_file = self.pendentes_file.with_suffix(".tmp")
+                    with open(temp_file, "w", encoding="utf-8") as f:
+                        f.write("".join(r + "\n" for r in restantes))
+                    temp_file.replace(self.pendentes_file)
                 else:
-                    restantes.append(linha)
-
-            if restantes:
-                with open(self.pendentes_file, "w", encoding="utf-8") as f:
-                    for r in restantes:
-                        f.write(r + "\n")
-            else:
-                self.pendentes_file.unlink(missing_ok=True)
+                    self.pendentes_file.unlink(missing_ok=True)
         except Exception as exc:
-            logger.error("Erro ao reenviar pendentes: %s", exc)
+            logger.error("Erro ao atualizar pendentes.jsonl: %s", exc)
+
+    def _reenviar_pendentes_periodicamente(self) -> None:
+        """Garante o reenvio mesmo que ninguém passe o cartão depois que a rede voltar."""
+        while True:
+            time.sleep(config.REENVIO_PENDENTES_SEGUNDOS)
+            try:
+                self._reenviar_pendentes_se_houver()
+            except Exception as exc:
+                logger.error("Erro no reenvio periódico de pendentes: %s", exc)
 
     # -------------------------------------------------------------------------
     # LOOP DE LEITURA

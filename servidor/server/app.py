@@ -231,17 +231,6 @@ def create_app(db_path: Path | str | None = None, seed_default: bool = True) -> 
             headers={"Content-Disposition": "attachment; filename=eventos.csv"},
         )
 
-    # =========================================================================
-    # SIMULADOR DO FRONT-END (Injeta evento no RabbitMQ simulando a Pi)
-    # =========================================================================
-    @app.post("/api/simular")
-    def simular_leitura_frontend(dados: dict[str, str]) -> dict[str, Any]:
-        """Permite que os botões de simulação da interface web enviem um evento para o RabbitMQ como se fosse a Pi."""
-        tag_uid = str(dados.get("tag_uid", "")).strip().upper()
-        # Valida regra local
-        resposta = service.validar_acesso(tag_uid=tag_uid)
-        return resposta.to_dict()
-
     return app
 
 

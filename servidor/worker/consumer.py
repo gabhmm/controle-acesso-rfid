@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import time
 from datetime import datetime
 from typing import Any
@@ -26,6 +27,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("rfid.worker")
 logging.getLogger("pika").setLevel(logging.CRITICAL)
+
+PAUSA_FALHA_BANCO_SEGUNDOS = 2
 
 
 def normalizar_data_hora(iso_string: str) -> str:
@@ -100,8 +103,19 @@ class EventConsumer:
 
             # Só dá ack DEPOIS de comitar no banco de dados (Regra da Página 3 do PDF)
             ch.basic_ack(delivery_tag=method.delivery_tag)
+        except sqlite3.IntegrityError as exc:
+            # Dado inválido (ex.: resultado fora da lista): tentar de novo não resolve.
+            logger.error("Evento rejeitado pelo banco (%s). Descartando.", exc)
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        except sqlite3.Error as exc:
+            # Falha do banco (travado, schema antigo, disco): o evento volta para a fila
+            # e é entregue de novo. A pausa evita repetir em ritmo frenético.
+            logger.error("Falha ao gravar no banco (%s). Evento devolvido à fila.", exc)
+            time.sleep(PAUSA_FALHA_BANCO_SEGUNDOS)
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
         except Exception as exc:
-            logger.error("Erro ao processar mensagem da fila: %s", exc)
+            # Mensagem malformada (JSON inválido, campos errados): descarta.
+            logger.error("Mensagem inválida na fila (%s). Descartando.", exc)
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
     def iniciar(self) -> None:

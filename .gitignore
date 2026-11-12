@@ -33,6 +33,12 @@ wheels/
 # Banco de dados e caches locais
 *.db
 *.db-journal
+
+# Dados locais da Raspberry (mudam a cada leitura)
+embarcado/hardware/cache.json
+embarcado/hardware/estado.json
+embarcado/hardware/pendentes.jsonl
+embarcado/hardware/*.tmp
 .pytest_cache/
 .coverage
 htmlcov/

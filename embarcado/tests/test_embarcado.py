@@ -104,5 +104,74 @@ class TestEmbarcado(unittest.TestCase):
         self.assertEqual(self.pi.decidir_acesso("A1B2C3D4")["resultado"], "NEGADO")
 
 
+class TestPendentes(unittest.TestCase):
+    """Eventos que não chegam ao broker ficam em pendentes.jsonl e são reenviados depois."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.pi = RaspberryPiClient(dispositivo="sala-aaa", pasta_dados=self.temp_dir.name)
+        self.pi.sinalizar = lambda evento: None  # sem LED nem texto nos testes
+        self.broker_no_ar = False
+        self.enviados: list[str] = []
+
+        def enviar_falso(evento: dict) -> bool:
+            if self.broker_no_ar:
+                self.enviados.append(evento["evento_id"])
+            return self.broker_no_ar
+
+        self.pi._enviar_evento_ao_broker = enviar_falso
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_broker_fora_guarda_e_reenvia_em_ordem(self) -> None:
+        ev1 = self.pi.processar_leitura("FF000001")
+        ev2 = self.pi.processar_leitura("FF000002")
+        self.assertEqual(len(self.pi._ler_pendentes()), 2)
+
+        # Rede volta: o reenvio periódico manda tudo, sem ninguém passar o cartão
+        self.broker_no_ar = True
+        self.pi._reenviar_pendentes_se_houver()
+        self.assertEqual(self.enviados, [ev1["evento_id"], ev2["evento_id"]])
+        self.assertFalse(self.pi.pendentes_file.exists())
+
+    def test_broker_ainda_fora_mantem_pendentes(self) -> None:
+        self.pi.processar_leitura("FF000001")
+        self.pi._reenviar_pendentes_se_houver()
+        self.assertEqual(len(self.pi._ler_pendentes()), 1)
+
+    def test_evento_gravado_durante_o_reenvio_nao_se_perde(self) -> None:
+        self.pi.processar_leitura("FF000001")
+        self.broker_no_ar = True
+        envio_original = self.pi._enviar_evento_ao_broker
+        novo: dict = {}
+        cartao_chegou = False
+
+        def enviar_e_chegar_cartao(evento: dict) -> bool:
+            # Enquanto o reenvio acontece, outro cartão chega com o broker caindo de novo
+            nonlocal cartao_chegou
+            if not cartao_chegou:
+                cartao_chegou = True
+                self.broker_no_ar = False
+                novo.update(self.pi.processar_leitura("FF000002"))
+                self.broker_no_ar = True
+            return envio_original(evento)
+
+        self.pi._enviar_evento_ao_broker = enviar_e_chegar_cartao
+        self.pi._reenviar_pendentes_se_houver()
+
+        restantes = [json.loads(l)["evento_id"] for l in self.pi._ler_pendentes()]
+        self.assertEqual(restantes, [novo["evento_id"]])
+
+    def test_linha_corrompida_e_descartada(self) -> None:
+        self.pi.processar_leitura("FF000001")
+        with open(self.pi.pendentes_file, "a", encoding="utf-8") as f:
+            f.write("{isso não é json\n")
+        self.broker_no_ar = True
+        self.pi._reenviar_pendentes_se_houver()
+        self.assertEqual(len(self.enviados), 1)
+        self.assertFalse(self.pi.pendentes_file.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

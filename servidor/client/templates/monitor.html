@@ -35,25 +35,6 @@
       <span class="page-header-meta">Controle de acesso · Sala restrita</span>
     </div>
 
-    <div class="simulator-bar">
-      <div style="display: flex; align-items: center; gap: 0.6rem;">
-        <span style="font-size: 0.78rem; font-weight: 600; color: var(--text-main);">Simulador RFID</span>
-        <code class="mono" style="font-size: 0.7rem;">RabbitMQ · evento.sala-aaa</code>
-      </div>
-      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;">
-        <button class="btn btn-secondary btn-sm" onclick="simularTag('A1B2C3D4')">Ana (A1B2C3D4)</button>
-        <button class="btn btn-secondary btn-sm" onclick="simularTag('B2C3D4E5')">Bruno (B2C3D4E5)</button>
-        <button class="btn btn-secondary btn-sm" onclick="simularTag('C3D4E5F6')">Carlos (C3D4E5F6)</button>
-        <button class="btn btn-danger btn-sm" onclick="simularTag('FF998877')">Invasão (FF998877)</button>
-        <form id="form-simular" style="display: inline-flex; gap: 0.35rem; align-items: center;">
-          <input type="text" id="input-tag-simular" placeholder="Tag UID..." style="width: 100px; padding: 0.28rem 0.6rem; font-size: 0.76rem;" />
-          <button type="submit" class="btn btn-primary btn-sm">Validar</button>
-        </form>
-      </div>
-    </div>
-
-    <div id="banner-validacao" style="display: none; margin-bottom: 1.2rem; padding: 0.7rem 1.1rem; border-radius: var(--radius-sm); font-size: 0.85rem;"></div>
-
     <div class="kpi-editorial-hero">
       <div class="kpi-card-hero">
         <span class="kpi-label">Presentes na sala</span>
@@ -148,8 +129,8 @@
     </div>
   </main>
 
-  <script src="/static/js/api.js"></script>
-  <script src="/static/js/monitor.js"></script>
+  <script src="/static/js/api.js?v=2"></script>
+  <script src="/static/js/monitor.js?v=2"></script>
 </body>
 
 </html>

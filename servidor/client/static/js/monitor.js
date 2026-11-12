@@ -142,45 +142,6 @@ async function atualizarPainelMonitoramento() {
   }
 }
 
-async function simularTag(tagUid) {
-  if (!tagUid) return;
-  const banner = document.getElementById("banner-validacao");
-  try {
-    const res = await Api.request("/api/simular", {
-      method: "POST",
-      body: JSON.stringify({ tag_uid: tagUid }),
-    });
-
-    const cores = {
-      ENTRADA: { bg: "var(--success-bg)", cor: "#34d399", borda: "rgba(16,185,129,0.45)" },
-      SAIDA: { bg: "var(--info-bg)", cor: "#60a5fa", borda: "rgba(59,130,246,0.45)" },
-      NEGADO: { bg: "var(--warning-bg)", cor: "#fbbf24", borda: "rgba(245,158,11,0.45)" },
-      INVASAO: { bg: "var(--danger-bg)", cor: "#f87171", borda: "rgba(239,68,68,0.55)" },
-    };
-    const estilo = cores[res.resultado] || cores.ENTRADA;
-
-    banner.style.display = "block";
-    banner.style.background = estilo.bg;
-    banner.style.color = estilo.cor;
-    banner.style.border = `1px solid ${estilo.borda}`;
-    banner.textContent = `[${res.resultado}] Tag ${tagUid.toUpperCase()} → "${res.mensagem}"`;
-
-    await atualizarPainelMonitoramento();
-  } catch (err) {
-    alert(err.message);
-  }
-}
-
-document.getElementById("form-simular").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const input = document.getElementById("input-tag-simular");
-  const valor = input.value.trim().toUpperCase();
-  if (valor) {
-    await simularTag(valor);
-    input.value = "";
-  }
-});
-
 // Inicialização imediata e polling estrito a cada 2 segundos (2000 ms)
 atualizarPainelMonitoramento();
 setInterval(atualizarPainelMonitoramento, 2000);
