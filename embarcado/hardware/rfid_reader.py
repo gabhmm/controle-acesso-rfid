@@ -13,17 +13,6 @@ import pika
 
 from hardware import config
 
-# A Pi só fala com o servidor pelo RabbitMQ: daqui vêm apenas os dados de conexão.
-from server.config import (
-    RABBITMQ_DISPOSITIVO,
-    RABBITMQ_EXCHANGE,
-    RABBITMQ_HOST,
-    RABBITMQ_PASS,
-    RABBITMQ_PORT,
-    RABBITMQ_USER,
-    RABBITMQ_VHOST,
-)
-
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] [%(levelname)s] [Pi-Hardware] %(message)s",
@@ -63,12 +52,12 @@ class RaspberryPiClient:
 
     def __init__(
         self,
-        dispositivo: str = RABBITMQ_DISPOSITIVO,
-        host: str = RABBITMQ_HOST,
-        port: int = RABBITMQ_PORT,
-        user: str = RABBITMQ_USER,
-        password: str = RABBITMQ_PASS,
-        vhost: str = RABBITMQ_VHOST,
+        dispositivo: str = config.DISPOSITIVO,
+        host: str = config.RABBITMQ_HOST,
+        port: int = config.RABBITMQ_PORT,
+        user: str = config.RABBITMQ_USER,
+        password: str = config.RABBITMQ_PASS,
+        vhost: str = config.RABBITMQ_VHOST,
         pasta_dados: Path | str = BASE_DIR,
     ) -> None:
         self.dispositivo = dispositivo
@@ -117,8 +106,6 @@ class RaspberryPiClient:
     # -------------------------------------------------------------------------
 
     def atualizar_cache(self, dados: dict[str, Any]) -> None:
-        """Guarda a lista recebida do servidor em cache.json e passa a usá-la."""
-        # Escrita atômica: uma queda de energia no meio não corrompe o cache.
         temp_file = self.cache_file.with_suffix(".tmp")
         with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(dados, f, ensure_ascii=False, indent=2)
@@ -150,7 +137,7 @@ class RaspberryPiClient:
                 )
                 with pika.BlockingConnection(parameters) as connection:
                     channel = connection.channel()
-                    # Mesma declaração do servidor (server/rabbit_producer.py).
+                    # Mesma declaração do servidor (servidor/server/rabbit_producer.py).
                     channel.queue_declare(
                         queue=self.fila_colaboradores,
                         durable=True,
@@ -261,7 +248,7 @@ class RaspberryPiClient:
                 channel.confirm_delivery()
 
                 channel.basic_publish(
-                    exchange=RABBITMQ_EXCHANGE,
+                    exchange=config.RABBITMQ_EXCHANGE,
                     routing_key=self.routing_key_evento,
                     body=json.dumps(evento, ensure_ascii=False).encode("utf-8"),
                     properties=pika.BasicProperties(

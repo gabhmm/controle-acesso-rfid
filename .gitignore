@@ -31,6 +31,7 @@ wheels/
 *.swo
 
 # Banco de dados e caches locais
+*.db
 *.db-journal
 .pytest_cache/
 .coverage

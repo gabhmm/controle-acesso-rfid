@@ -1,0 +1,4 @@
+pika>=1.3.2
+
+# Só na Raspberry Pi (o gpiozero e o RPi.GPIO já vêm no Raspberry Pi OS):
+# mfrc522

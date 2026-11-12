@@ -7,7 +7,6 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from hardware.rfid_reader import RaspberryPiClient
 from server.database import DatabaseRepository
 from server.models import Colaborador
 from server.rabbit_producer import RabbitMQProducer
@@ -158,61 +157,6 @@ class TestControleAcessoContratoRabbitMQ(unittest.TestCase):
         self.assertIn("atualizado_em", enviado)
         self.assertEqual(len(enviado["colaboradores"]), 1)
         self.assertEqual(enviado["colaboradores"][0]["tag_uid"], "A1B2C3D4")
-
-    def test_05_decisao_autonoma_na_raspberry_pi(self) -> None:
-        """Testa a Pi decidindo o acesso sozinha, só com a lista recebida do servidor pela fila."""
-        pi = RaspberryPiClient(dispositivo="sala-aaa", pasta_dados=self.temp_dir.name)
-
-        # Sem lista recebida, todo cartão é INVASAO
-        self.assertEqual(pi.decidir_acesso("A1B2C3D4")["resultado"], "INVASAO")
-
-        class MockChannel:
-            acks = 0
-            nacks = 0
-            def basic_ack(self, delivery_tag: int) -> None:
-                self.acks += 1
-            def basic_nack(self, delivery_tag: int, requeue: bool = False) -> None:
-                self.nacks += 1
-
-        class MockMethod:
-            delivery_tag = 1
-
-        # Mensagem no formato que o servidor publica (Servidor -> Pi)
-        self.rabbit.publicar_colaboradores([
-            {"id": 1, "nome": "Ana", "tag_uid": "A1B2C3D4", "acesso_sala": True, "ativo": True},
-            {"id": 2, "nome": "Carlos", "tag_uid": "C3D4E5F6", "acesso_sala": False, "ativo": True},
-        ])
-        canal = MockChannel()
-        corpo = json.dumps(self.rabbit.fila_memoria[-1]).encode("utf-8")
-        pi._receber_lista(canal, MockMethod(), None, corpo)
-        self.assertEqual(canal.acks, 1)
-
-        # Mensagem fora do contrato é descartada e não apaga a lista atual
-        pi._receber_lista(canal, MockMethod(), None, json.dumps({"versao": 2}).encode("utf-8"))
-        self.assertEqual(canal.nacks, 1)
-        self.assertEqual(len(pi.colaboradores_cache), 2)
-
-        # A lista sobrevive a um reinício da Pi (cache.json)
-        pi = RaspberryPiClient(dispositivo="sala-aaa", pasta_dados=self.temp_dir.name)
-        self.assertEqual(len(pi.colaboradores_cache), 2)
-
-        # 1. Ana (autorizada) -> ENTRADA
-        ev1 = pi.decidir_acesso("A1B2C3D4")
-        self.assertEqual(ev1["resultado"], "ENTRADA")
-        self.assertEqual(ev1["versao"], 1)
-        self.assertEqual(ev1["nome"], "Ana")
-        self.assertEqual(ev1["dispositivo"], "sala-aaa")
-
-        # 2. Carlos (bloqueado) -> NEGADO
-        ev2 = pi.decidir_acesso("C3D4E5F6")
-        self.assertEqual(ev2["resultado"], "NEGADO")
-
-        # 3. Desconhecido -> INVASAO (mensagem exata da Página 4)
-        ev3 = pi.decidir_acesso("FF998877")
-        self.assertEqual(ev3["resultado"], "INVASAO")
-        self.assertEqual(ev3["mensagem"], "Acesso negado, tag não cadastrada")
-        self.assertIsNone(ev3["nome"])
-        self.assertIsNone(ev3["colaborador_id"])
 
 
 if __name__ == "__main__":

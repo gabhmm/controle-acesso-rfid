@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # Configuração de logging
 logging.basicConfig(
@@ -55,7 +56,7 @@ def imprimir_banner() -> None:
     print(r"""
 ========================================================================
    🛡️ SISTEMA DISTRIBUÍDO DE CONTROLE DE ACESSO & MONITORAMENTO RFID
-   FastAPI  ·  Redis (Cache-Aside)  ·  RabbitMQ  ·  Raspberry Pi / RC522
+   SERVIDOR: FastAPI  ·  Redis  ·  RabbitMQ  ·  Worker  ·  SQLite
 ========================================================================
     """)
     print("  🌐 Painel de Monitoramento : http://localhost:5000/monitor")
@@ -128,14 +129,13 @@ def main() -> None:
     )
     processos.append(proc_server)
 
-    # Aguarda 1.5s para o servidor inicializar
-    time.sleep(1.5)
-
-    # 4. Executa o Leitor de Hardware RFID (RC522 ou Simulador) no processo principal
+    # O leitor RFID não roda aqui: ele fica no projeto embarcado/ (na Raspberry)
+    # e conversa com este servidor só pelo RabbitMQ.
+    logger.info("Servidor no ar. Aguardando eventos da Raspberry pelo RabbitMQ...")
     try:
-        from hardware.rfid_reader import RaspberryPiClient
-        controller = RaspberryPiClient()
-        controller.loop_leitura_continua()
+        while all(p.poll() is None for p in processos):
+            time.sleep(1)
+        logger.error("Um dos serviços parou inesperadamente.")
     except KeyboardInterrupt:
         pass
     finally:
