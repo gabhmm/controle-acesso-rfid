@@ -10,7 +10,6 @@ from typing import Any
 import pika
 
 from server.config import (
-    RABBITMQ_DISPOSITIVO,
     RABBITMQ_EXCHANGE,
     RABBITMQ_FILA_PI,
     RABBITMQ_FILA_SERVIDOR,

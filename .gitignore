@@ -44,6 +44,6 @@ embarcado/hardware/*.tmp
 htmlcov/
 
 # Mestre Jedi logs privados (mantém apenas templates e tasks compartilhadas se desejar)
-.mestre-jedi/artifacts/
-.mestre-jedi/old_logs/
+docs/mestre-jedi/artifacts/
+docs/mestre-jedi/old_logs/
 

@@ -67,36 +67,6 @@ class RedisClient:
             self._conectar()
         return self._client is not None
 
-    def obter_tag_cache(self, tag_uid: str) -> dict[str, Any] | None:
-        chave = f"rfid:tag:{tag_uid.strip().upper()}"
-        if self.disponivel and self._client:
-            try:
-                dados = self._client.get(chave)
-                if dados:
-                    return json.loads(dados)
-            except Exception:
-                pass
-        return self._memoria_cache.get(chave)
-
-    def salvar_tag_cache(self, tag_uid: str, dados: dict[str, Any], ttl_segundos: int = 300) -> None:
-        chave = f"rfid:tag:{tag_uid.strip().upper()}"
-        if self.disponivel and self._client:
-            try:
-                self._client.setex(chave, ttl_segundos, json.dumps(dados, ensure_ascii=False))
-                return
-            except Exception:
-                pass
-        self._memoria_cache[chave] = dados
-
-    def invalidar_tag_cache(self, tag_uid: str) -> None:
-        chave = f"rfid:tag:{tag_uid.strip().upper()}"
-        if self.disponivel and self._client:
-            try:
-                self._client.delete(chave)
-            except Exception:
-                pass
-        self._memoria_cache.pop(chave, None)
-
     def obter_dashboard_cache(self) -> dict[str, Any] | None:
         if self.disponivel and self._client:
             try:
@@ -115,49 +85,6 @@ class RedisClient:
             except Exception:
                 pass
         self._memoria_cache["rfid:dashboard:10min"] = dados
-
-    def obter_estado_na_sala(self, matricula: str) -> bool | None:
-        chave = f"rfid:na_sala:{matricula}"
-        if self.disponivel and self._client:
-            try:
-                val = self._client.get(chave)
-                if val is not None:
-                    return val == "1"
-            except Exception:
-                pass
-        val_mem = self._memoria_cache.get(chave)
-        return val_mem if isinstance(val_mem, bool) else None
-
-    def definir_estado_na_sala(self, matricula: str, na_sala: bool, ttl_segundos: int = 86400) -> None:
-        chave = f"rfid:na_sala:{matricula}"
-        if self.disponivel and self._client:
-            try:
-                self._client.setex(chave, ttl_segundos, "1" if na_sala else "0")
-                return
-            except Exception:
-                pass
-        self._memoria_cache[chave] = na_sala
-
-    def obter_entrou_hoje(self, matricula: str) -> bool:
-        chave = f"rfid:entrou_hoje:{matricula}"
-        if self.disponivel and self._client:
-            try:
-                val = self._client.get(chave)
-                if val is not None:
-                    return val == "1"
-            except Exception:
-                pass
-        return bool(self._memoria_cache.get(chave, False))
-
-    def definir_entrou_hoje(self, matricula: str, ttl_segundos: int = 86400) -> None:
-        chave = f"rfid:entrou_hoje:{matricula}"
-        if self.disponivel and self._client:
-            try:
-                self._client.setex(chave, ttl_segundos, "1")
-                return
-            except Exception:
-                pass
-        self._memoria_cache[chave] = True
 
 
 redis_client = RedisClient()

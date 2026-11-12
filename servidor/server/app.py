@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from server.config import ADMIN_PASS, ADMIN_USER, DB_PATH, PROJECT_ROOT, RABBITMQ_DISPOSITIVO, RABBITMQ_EXCHANGE
+from server.config import ADMIN_PASS, ADMIN_USER, DB_PATH, PROJECT_ROOT
 from server.database import DatabaseRepository
 from server.models import (
     Colaborador,
@@ -57,7 +56,7 @@ def create_app(db_path: Path | str | None = None, seed_default: bool = True) -> 
     # Repositório e Serviço
     repo = DatabaseRepository(db_path=db_path or DB_PATH)
     repo.init_db(seed_default=seed_default)
-    service = AccessService(repo=repo, redis=redis_client, rabbit=rabbit_producer)
+    service = AccessService(repo=repo, redis=redis_client)
 
     app.state.repo = repo
     app.state.service = service
@@ -149,7 +148,6 @@ def create_app(db_path: Path | str | None = None, seed_default: bool = True) -> 
         )
         try:
             criado = repo.criar_colaborador(novo)
-            redis_client.invalidar_tag_cache(tag_norm)
             # Notifica a Raspberry Pi publicando a nova lista na fila 'pi.<disp>.colaboradores'
             sincronizar_colaboradores_com_pi()
             return criado.to_dict()
@@ -179,8 +177,6 @@ def create_app(db_path: Path | str | None = None, seed_default: bool = True) -> 
             res = repo.atualizar_colaborador(colab_id, atualizado_obj)
             if res is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Colaborador não encontrado")
-            redis_client.invalidar_tag_cache(existente.tag_uid)
-            redis_client.invalidar_tag_cache(tag_norm)
             # Notifica a Raspberry Pi com a lista atualizada
             sincronizar_colaboradores_com_pi()
             return res.to_dict()
@@ -198,7 +194,6 @@ def create_app(db_path: Path | str | None = None, seed_default: bool = True) -> 
 
         sucesso = repo.excluir_colaborador(colab_id)
         if sucesso:
-            redis_client.invalidar_tag_cache(existente.tag_uid)
             sincronizar_colaboradores_com_pi()
         return {"ok": sucesso}
 

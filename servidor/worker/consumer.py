@@ -90,7 +90,7 @@ class EventConsumer:
 
             # Grava no banco ignorando evento_id duplicado
             self.repo.registrar_evento(
-                data_hora_ou_evento=data_hora,
+                data_hora=data_hora,
                 tag_uid=tag_uid,
                 nome=nome,
                 resultado=resultado,  # type: ignore[arg-type]

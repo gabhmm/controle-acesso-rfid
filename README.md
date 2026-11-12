@@ -20,8 +20,7 @@ flowchart TD
         Service["AccessService"]
     end
 
-    subgraph Cache_Redis ["🔴 Redis (Cache Distribuído)"]
-        R_Tag["🔑 Cache-Aside: rfid:tag:{uid} (TTL 300s)"]
+    subgraph Cache_Redis ["🔴 Redis (Cache)"]
         R_Dash["📈 Dashboard 10 min: rfid:dashboard:10min (TTL 10s)"]
     end
 
@@ -52,7 +51,7 @@ flowchart TD
     Queue --> Worker
     Worker -->|5. Gravação sem travar a porta| DB
     WebMonitor -->|Consome dados em cache| API
-    WebAdmin -->|CRUD de Usuários / Invalida Cache| API
+    WebAdmin -->|CRUD de colaboradores| API
 ```
 
 ### Estrutura do repositório
@@ -70,10 +69,12 @@ controle-acesso-rfid/
 │   ├── requirements.txt
 │   └── main.py            # sobe API + worker
 │
-└── embarcado/             # roda na Raspberry Pi
-    ├── hardware/          # rfid_reader (porta), leitor (RC522), atuadores (LED e buzzer), config
-    ├── tests/
-    └── requirements.txt
+├── embarcado/             # roda na Raspberry Pi
+│   ├── hardware/          # rfid_reader (porta), leitor (RC522), atuadores (LED e buzzer), config
+│   ├── tests/
+│   └── requirements.txt
+│
+└── docs/                  # documentação histórica (planejamento e versões v1/v2)
 ```
 
 | Fila | Sentido | Conteúdo |
@@ -169,7 +170,11 @@ Na Pi, edite [`embarcado/hardware/config.py`](embarcado/hardware/config.py): `RA
 
 > Servidor rodando no WSL2: a Pi não alcança a rede interna do WSL. Ative `networkingMode=mirrored` no `.wslconfig` ou encaminhe a porta com `netsh interface portproxy`.
 
-Sem conexão com o RabbitMQ, a Pi continua decidindo com o `cache.json` e guarda os eventos em `pendentes.jsonl` até conseguir enviar. Se ela nunca recebeu a lista, todo cartão é `INVASAO`.
+Sem conexão com o RabbitMQ, a Pi continua decidindo com o `cache.json` e guarda os eventos em `pendentes.jsonl`. Uma thread tenta reenviá-los a cada 15 s (`REENVIO_PENDENTES_SEGUNDOS`), sem depender de uma nova leitura. Se ela nunca recebeu a lista, todo cartão é `INVASAO`.
+
+No servidor, se a gravação no banco falhar (banco travado, schema antigo), o worker devolve o evento à fila e tenta de novo; só descarta mensagens inválidas.
+
+Os arquivos `cache.json`, `estado.json` e `pendentes.jsonl` são dados locais da Pi e ficam fora do git. Num clone novo, a Pi começa sem ninguém na sala e recebe a lista do servidor ao conectar.
 
 ---
 
@@ -191,8 +196,8 @@ A validação do cartão não é uma rota: acontece dentro da porta (`embarcado/
 | `POST` | `/login` | Autentica o administrador do sistema. |
 | `GET` | `/api/dashboard/10min` | Retorna métricas dos últimos 10 minutos cacheadas no Redis. |
 | `GET` | `/api/colaboradores` | Lista colaboradores com permissões e estado do dia. |
-| `POST` | `/api/colaboradores` | Cadastra novo colaborador e tag (invalida cache). |
-| `PUT` | `/api/colaboradores/{id}` | Edita permissões e crachá do colaborador (invalida cache). |
+| `POST` | `/api/colaboradores` | Cadastra novo colaborador e tag (publica a lista nova para a Pi). |
+| `PUT` | `/api/colaboradores/{id}` | Edita permissões e crachá do colaborador (publica a lista nova para a Pi). |
 | `DELETE`| `/api/colaboradores/{id}` | Remove colaborador do sistema. |
 | `GET` | `/api/eventos` | Lista registros de acesso filtrados por data ou completos. |
 | `GET` | `/api/eventos.csv` | Exporta relatório consolidado para análise no Pandas (`Analise1.ipynb`). |

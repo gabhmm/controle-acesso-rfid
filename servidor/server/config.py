@@ -8,7 +8,6 @@ PROJECT_ROOT: Path = BASE_DIR.parent
 
 # Banco de Dados SQLite
 DB_PATH: Path = Path(os.environ.get("ACESSO_DB_PATH", str(BASE_DIR / "acesso.db")))
-SECRET_KEY: str = os.environ.get("SECRET_KEY", "rfid-controle-lab-secret-2026")
 
 # Autenticação do Administrador
 ADMIN_USER: str = os.environ.get("ADMIN_USER", "admin")

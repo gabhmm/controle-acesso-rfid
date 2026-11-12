@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import csv
 import io
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
-from server.config import RABBITMQ_DISPOSITIVO
 from server.database import DatabaseRepository
-from server.models import Colaborador, Evento, RespostaValidacao, ResultadoEvento
-from server.rabbit_producer import RabbitMQProducer, rabbit_producer
+from server.models import Colaborador, Evento
 from server.redis_client import RedisClient, redis_client
 
 FORMATO_DATA_HORA = "%Y-%m-%d %H:%M:%S"
@@ -23,11 +20,9 @@ class AccessService:
         self,
         repo: DatabaseRepository,
         redis: RedisClient = redis_client,
-        rabbit: RabbitMQProducer = rabbit_producer,
     ) -> None:
         self.repo: DatabaseRepository = repo
         self.redis: RedisClient = redis
-        self.rabbit: RabbitMQProducer = rabbit
 
     @staticmethod
     def _calcular_estado_colaborador_hoje(
@@ -90,99 +85,6 @@ class AccessService:
             colab.tempo_hoje_segundos = tempo_seg
 
         return colaboradores
-
-    def validar_acesso(self, tag_uid: str, agora: datetime | None = None) -> RespostaValidacao:
-        """Validação de regras com mensagens padronizadas conforme Contrato RabbitMQ v1."""
-        dt_agora = agora or datetime.now()
-        data_hora_str = dt_agora.strftime(FORMATO_DATA_HORA)
-        hoje_str = dt_agora.strftime(FORMATO_DATA)
-        tag_norm = tag_uid.strip().upper()
-
-        # Mensagem de INVASAO exata do PDF (Página 4)
-        MSG_INVASAO = "Acesso negado, tag não cadastrada"
-
-        if not tag_norm:
-            self.repo.registrar_evento(data_hora_str, "DESCONHECIDO", "Desconhecido", "INVASAO")
-            return RespostaValidacao(
-                resultado="INVASAO",
-                mensagem=MSG_INVASAO,
-            )
-
-        colab = self.repo.obter_colaborador_por_tag(tag_norm)
-        if colab is None:
-            self.repo.registrar_evento(
-                data_hora_ou_evento=data_hora_str,
-                tag_uid=tag_norm,
-                nome="Desconhecido",
-                resultado="INVASAO",
-                evento_id=str(uuid.uuid4()),
-                colaborador_id=None,
-                mensagem=MSG_INVASAO,
-                dispositivo=RABBITMQ_DISPOSITIVO,
-            )
-            return RespostaValidacao(
-                resultado="INVASAO",
-                mensagem=MSG_INVASAO,
-            )
-
-        if not colab.ativo or not colab.acesso_sala:
-            msg = f"Acesso negado, {colab.nome}"
-            self.repo.registrar_evento(
-                data_hora_ou_evento=data_hora_str,
-                tag_uid=tag_norm,
-                nome=colab.nome,
-                resultado="NEGADO",
-                evento_id=str(uuid.uuid4()),
-                colaborador_id=colab.id,
-                mensagem=msg,
-                dispositivo=RABBITMQ_DISPOSITIVO,
-            )
-            return RespostaValidacao(
-                resultado="NEGADO",
-                mensagem=msg,
-            )
-
-        # Regra de Entrada / Saída
-        estado_sala_redis = self.redis.obter_estado_na_sala(colab.matricula)
-        entrou_hoje_redis = self.redis.obter_entrou_hoje(colab.matricula)
-        eventos_hoje = self.repo.listar_eventos(data_prefixo=hoje_str)
-        na_sala, entrou_hoje, _ = self._calcular_estado_colaborador_hoje(
-            tag_norm, eventos_hoje, dt_agora
-        )
-
-        if estado_sala_redis is not None:
-            na_sala = estado_sala_redis
-        if entrou_hoje_redis:
-            entrou_hoje = True
-
-        resultado: ResultadoEvento
-        mensagem: str
-
-        if not entrou_hoje and not na_sala:
-            resultado = "ENTRADA"
-            mensagem = f"Bem-vindo, {colab.nome}"
-            self.redis.definir_estado_na_sala(colab.matricula, True)
-            self.redis.definir_entrou_hoje(colab.matricula)
-        elif na_sala:
-            resultado = "SAIDA"
-            mensagem = f"Até logo, {colab.nome}"
-            self.redis.definir_estado_na_sala(colab.matricula, False)
-        else:
-            resultado = "ENTRADA"
-            mensagem = f"Bem-vindo de volta, {colab.nome}"
-            self.redis.definir_estado_na_sala(colab.matricula, True)
-
-        self.repo.registrar_evento(
-            data_hora_ou_evento=data_hora_str,
-            tag_uid=tag_norm,
-            nome=colab.nome,
-            resultado=resultado,
-            evento_id=str(uuid.uuid4()),
-            colaborador_id=colab.id,
-            mensagem=mensagem,
-            dispositivo=RABBITMQ_DISPOSITIVO,
-        )
-        return RespostaValidacao(resultado=resultado, mensagem=mensagem)
 
     def obter_dashboard_10_minutos(self) -> dict[str, Any]:
         cache = self.redis.obter_dashboard_cache()

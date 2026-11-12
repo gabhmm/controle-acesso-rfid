@@ -4,7 +4,6 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 from server.config import DB_PATH
 from server.models import Colaborador, Evento, ResultadoEvento
@@ -134,16 +133,6 @@ class DatabaseRepository:
             row = cur.fetchone()
             return self._row_to_colaborador(row) if row else None
 
-    def obter_colaborador_por_tag(self, tag_uid: str) -> Colaborador | None:
-        tag_norm = tag_uid.strip().upper()
-        with self._get_connection() as conn:
-            cur = conn.execute(
-                "SELECT id, nome, matricula, tag_uid, cargo, acesso_sala, ativo FROM colaboradores WHERE UPPER(tag_uid) = ?",
-                (tag_norm,),
-            )
-            row = cur.fetchone()
-            return self._row_to_colaborador(row) if row else None
-
     def criar_colaborador(self, colab: Colaborador) -> Colaborador:
         tag_norm = colab.tag_uid.strip().upper()
         matricula_norm = colab.matricula.strip()
@@ -207,35 +196,24 @@ class DatabaseRepository:
 
     def registrar_evento(
         self,
-        data_hora_ou_evento: str | Evento,
-        tag_uid: str | None = None,
-        nome: str | None = None,
-        resultado: ResultadoEvento | None = None,
+        data_hora: str,
+        tag_uid: str,
+        nome: str,
+        resultado: ResultadoEvento,
         evento_id: str | None = None,
         colaborador_id: int | None = None,
         mensagem: str | None = None,
         dispositivo: str | None = None,
-    ) -> Evento | None:
+    ) -> Evento:
         """Registra um evento de acesso. Se evento_id for duplicado, ignora (INSERT OR IGNORE)."""
-        if isinstance(data_hora_ou_evento, Evento):
-            ev = data_hora_ou_evento
-            d_hora = ev.data_hora
-            t_uid = ev.tag_uid.strip().upper()
-            n_nome = ev.nome
-            r_resultado = ev.resultado
-            e_id = ev.evento_id
-            c_id = ev.colaborador_id
-            m_msg = ev.mensagem
-            disp = ev.dispositivo
-        else:
-            d_hora = data_hora_ou_evento
-            t_uid = (tag_uid or "DESCONHECIDO").strip().upper()
-            n_nome = nome or "Desconhecido"
-            r_resultado = resultado or "INVASAO"
-            e_id = evento_id
-            c_id = colaborador_id
-            m_msg = mensagem
-            disp = dispositivo
+        d_hora = data_hora
+        t_uid = (tag_uid or "DESCONHECIDO").strip().upper()
+        n_nome = nome or "Desconhecido"
+        r_resultado = resultado
+        e_id = evento_id
+        c_id = colaborador_id
+        m_msg = mensagem
+        disp = dispositivo
 
         with self._get_connection() as conn:
             cur = conn.execute(

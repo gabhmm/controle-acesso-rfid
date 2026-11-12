@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 import uuid
-from datetime import datetime, timedelta
+
 from pathlib import Path
 
 from server.database import DatabaseRepository
@@ -25,7 +25,7 @@ class TestControleAcessoContratoRabbitMQ(unittest.TestCase):
         self.repo.init_db(seed_default=False)
         self.redis = RedisClient(habilitado=False)
         self.rabbit = RabbitMQProducer(habilitado=False)
-        self.service = AccessService(repo=self.repo, redis=self.redis, rabbit=self.rabbit)
+        self.service = AccessService(repo=self.repo, redis=self.redis)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -56,41 +56,6 @@ class TestControleAcessoContratoRabbitMQ(unittest.TestCase):
         # Excluir
         removido = self.repo.excluir_colaborador(criado.id)
         self.assertTrue(removido)
-
-    def test_02_regras_negocio_mensagens_pdf(self) -> None:
-        self.repo.criar_colaborador(
-            Colaborador(id=None, nome="Carlos", matricula="03", tag_uid="C3D4E5F6", cargo="QA", acesso_sala=False, ativo=True)
-        )
-        self.repo.criar_colaborador(
-            Colaborador(id=None, nome="Bruno", matricula="02", tag_uid="B2C3D4E5", cargo="Dev", acesso_sala=True, ativo=True)
-        )
-
-        agora = datetime(2026, 11, 9, 8, 0, 0)
-
-        # INVASAO: Mensagem exata exigida na Página 4 do PDF
-        resp_inv = self.service.validar_acesso("UNKNOWN_TAG", agora=agora)
-        self.assertEqual(resp_inv.resultado, "INVASAO")
-        self.assertEqual(resp_inv.mensagem, "Acesso negado, tag não cadastrada")
-
-        # NEGADO
-        resp_neg = self.service.validar_acesso("C3D4E5F6", agora=agora)
-        self.assertEqual(resp_neg.resultado, "NEGADO")
-        self.assertEqual(resp_neg.mensagem, "Acesso negado, Carlos")
-
-        # ENTRADA
-        resp_ent1 = self.service.validar_acesso("B2C3D4E5", agora=agora)
-        self.assertEqual(resp_ent1.resultado, "ENTRADA")
-        self.assertEqual(resp_ent1.mensagem, "Bem-vindo, Bruno")
-
-        # SAIDA
-        resp_sai = self.service.validar_acesso("B2C3D4E5", agora=agora + timedelta(hours=4))
-        self.assertEqual(resp_sai.resultado, "SAIDA")
-        self.assertEqual(resp_sai.mensagem, "Até logo, Bruno")
-
-        # ENTRADA (volta)
-        resp_ent2 = self.service.validar_acesso("B2C3D4E5", agora=agora + timedelta(hours=5))
-        self.assertEqual(resp_ent2.resultado, "ENTRADA")
-        self.assertEqual(resp_ent2.mensagem, "Bem-vindo de volta, Bruno")
 
     def test_03_worker_consumo_e_deduplicacao(self) -> None:
         """Testa o consumidor processando mensagem idêntica à Página 3 do PDF e ignorando duplicata."""

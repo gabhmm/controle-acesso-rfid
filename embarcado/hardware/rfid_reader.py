@@ -389,8 +389,6 @@ class RaspberryPiClient:
             pass
 
 
-HardwareController = RaspberryPiClient
-
 if __name__ == "__main__":
     client = RaspberryPiClient()
     client.loop_leitura_continua()

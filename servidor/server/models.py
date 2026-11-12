@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 ResultadoEvento = Literal["ENTRADA", "SAIDA", "NEGADO", "INVASAO"]
 
@@ -41,15 +41,6 @@ class Evento:
     dispositivo: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class RespostaValidacao:
-    resultado: ResultadoEvento
-    mensagem: str
-
-    def to_dict(self) -> dict[str, str]:
         return asdict(self)
 
 
