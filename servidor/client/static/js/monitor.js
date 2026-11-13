@@ -10,16 +10,16 @@ function renderizarItemEvento(ev, destacarAlerta = false) {
     <li class="event-item ${classeAlerta}">
       <div>
         <div style="font-weight: 600; font-size: 0.92rem;">
-          ${ev.nome}
-          <span class="mono" style="margin-left: 0.35rem; font-weight: 400;">${ev.tag_uid}</span>
+          ${Api.escaparHtml(ev.nome)}
+          <span class="mono" style="margin-left: 0.35rem; font-weight: 400;">${Api.escaparHtml(ev.tag_uid)}</span>
         </div>
         <div style="font-size: 0.78rem; color: var(--text-secondary);">
-          Horário: ${ev.data_hora} (ID #${ev.id})
+          Horário: ${Api.escaparHtml(ev.data_hora)} (ID #${ev.id})
         </div>
       </div>
       <div style="text-align: right;">
         <span class="badge badge-${ev.resultado}">${ev.resultado}</span>
-        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.2rem;">${horaApenas}</div>
+        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.2rem;">${Api.escaparHtml(horaApenas)}</div>
       </div>
     </li>
   `;
@@ -81,13 +81,13 @@ function renderizarPresentesNaSala(eventosHoje, colaboradores) {
         <div class="occupant-card">
           <div style="display: flex; justify-content: space-between; align-items: flex-start;">
             <div>
-              <div style="font-weight: 700; font-size: 0.96rem;">${evento.nome}</div>
-              <div style="font-size: 0.8rem; color: var(--text-secondary);">${cargo}</div>
+              <div style="font-weight: 700; font-size: 0.96rem;">${Api.escaparHtml(evento.nome)}</div>
+              <div style="font-size: 0.8rem; color: var(--text-secondary);">${Api.escaparHtml(cargo)}</div>
             </div>
-            <span class="mono">${evento.tag_uid}</span>
+            <span class="mono">${Api.escaparHtml(evento.tag_uid)}</span>
           </div>
           <div style="margin-top: 0.6rem; padding-top: 0.45rem; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--text-secondary);">
-            <span>Entrou às <strong>${horaEntrada}</strong></span>
+            <span>Entrou às <strong>${Api.escaparHtml(horaEntrada)}</strong></span>
             <span>Hoje: <strong style="color: var(--success);">${tempoHoje}</strong></span>
           </div>
         </div>

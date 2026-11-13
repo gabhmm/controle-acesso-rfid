@@ -54,10 +54,10 @@ function renderizarTabela() {
       return `
         <tr>
           <td>#${c.id}</td>
-          <td style="font-weight: 600;">${c.nome}</td>
-          <td><span class="mono">${c.matricula}</span></td>
-          <td>${c.cargo}</td>
-          <td><span class="mono">${c.tag_uid}</span></td>
+          <td style="font-weight: 600;">${Api.escaparHtml(c.nome)}</td>
+          <td><span class="mono">${Api.escaparHtml(c.matricula)}</span></td>
+          <td>${Api.escaparHtml(c.cargo)}</td>
+          <td><span class="mono">${Api.escaparHtml(c.tag_uid)}</span></td>
           <td>${badgeAcesso}</td>
           <td>${badgeAtivo}</td>
           <td>${badgeSala}</td>
@@ -67,7 +67,7 @@ function renderizarTabela() {
               ${c.acesso_sala ? "Revogar Sala" : "Liberar Sala"}
             </button>
             <button class="btn btn-secondary btn-sm" onclick="abrirModalEditar(${c.id})">Editar</button>
-            <button class="btn btn-danger btn-sm" onclick="excluirColaborador(${c.id}, '${c.nome.replace(/'/g, "\\'")}')">Excluir</button>
+            <button class="btn btn-danger btn-sm" onclick="excluirColaborador(${c.id})">Excluir</button>
           </td>
         </tr>
       `;
@@ -125,13 +125,15 @@ async function togglePermissaoRapida(id) {
   }
 }
 
-async function excluirColaborador(id, nome) {
-  if (!confirm(`Tem certeza que deseja excluir o colaborador "${nome}"?`)) {
+async function excluirColaborador(id) {
+  const colab = listaColaboradores.find((item) => item.id === id);
+  if (!colab) return;  
+  if (!confirm(`Tem certeza que deseja excluir o colaborador "${colab.nome}"?`)) {
     return;
   }
   try {
     await Api.request(`/api/colaboradores/${id}`, { method: "DELETE" });
-    exibirMensagem(`Colaborador "${nome}" removido com sucesso.`);
+    exibirMensagem(`Colaborador "${colab.nome}" removido com sucesso.`);
     await carregarColaboradores();
   } catch (err) {
     exibirMensagem(err.message, true);

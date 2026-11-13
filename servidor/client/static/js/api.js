@@ -15,6 +15,17 @@ const Api = {
     }
     return data;
   },
+  escaparHtml(valor) {
+  if (valor === null || valor === undefined) return "";
+  const texto = String(valor);
+  const mapa = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+  let resultado = "";
+  for (const c of texto) {
+    resultado += mapa[c] ?? c;
+ 
+  }
+  return resultado;
+  },
 
   // O login responde {erro: "..."}; o FastAPI responde {detail: "..."} nos erros das rotas
   // e {detail: [{msg: "..."}]} quando um campo do formulário é inválido (422).
