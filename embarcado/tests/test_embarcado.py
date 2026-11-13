@@ -59,6 +59,23 @@ class TestEmbarcado(unittest.TestCase):
         reiniciada = RaspberryPiClient(dispositivo="sala-aaa", pasta_dados=self.temp_dir.name)
         self.assertEqual(len(reiniciada.colaboradores_cache), 2)
 
+    def test_lista_repetida_nao_regrava_o_cache(self) -> None:
+        """O servidor republica a lista a cada minuto; lista igual não regrava o cache.json."""
+        self.receber(LISTA_DO_SERVIDOR)
+        dados = json.loads(self.pi.cache_file.read_text(encoding="utf-8"))
+        dados["marcador"] = "intocado"
+        self.pi.cache_file.write_text(json.dumps(dados), encoding="utf-8")
+
+        canal = self.receber(dict(LISTA_DO_SERVIDOR, atualizado_em="2026-11-09T22:24:53-03:00"))
+        self.assertEqual(canal.acks, 1)
+        self.assertIn("marcador", json.loads(self.pi.cache_file.read_text(encoding="utf-8")))
+
+        # Lista diferente regrava
+        alterada = json.loads(json.dumps(LISTA_DO_SERVIDOR))
+        alterada["colaboradores"][0]["ativo"] = False
+        self.receber(alterada)
+        self.assertNotIn("marcador", json.loads(self.pi.cache_file.read_text(encoding="utf-8")))
+
     def test_mensagem_fora_do_contrato_e_descartada(self) -> None:
         self.receber(LISTA_DO_SERVIDOR)
         canal = self.receber({"versao": 2})

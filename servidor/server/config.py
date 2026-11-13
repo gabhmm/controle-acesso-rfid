@@ -30,3 +30,8 @@ RABBITMQ_EXCHANGE: str = "acesso"  # topic, durável
 RABBITMQ_FILA_SERVIDOR: str = "servidor.eventos"  # bind evento.*
 RABBITMQ_DISPOSITIVO: str = os.environ.get("DISPOSITIVO", "sala-aaa")
 RABBITMQ_FILA_PI: str = f"pi.{RABBITMQ_DISPOSITIVO}.colaboradores"  # x-max-length: 1, bind colaboradores
+
+# A cada quantos segundos o servidor republica a lista de colaboradores para a Pi.
+# Garante que uma Pi que liga sem cache.json (ou que perdeu a última mensagem)
+# receba a lista sem depender de alguém editar um colaborador.
+REPUBLICAR_LISTA_SEGUNDOS: int = int(os.environ.get("REPUBLICAR_LISTA_SEGUNDOS", "60"))

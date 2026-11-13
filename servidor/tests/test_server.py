@@ -170,5 +170,39 @@ class TestControleAcessoContratoRabbitMQ(unittest.TestCase):
         self.assertEqual(enviado["colaboradores"][0]["tag_uid"], "A1B2C3D4")
 
 
+    def test_05_servidor_republica_a_lista_periodicamente(self) -> None:
+        """Uma Pi que liga sem cache.json recebe a lista sem depender de edição no painel."""
+        import time
+        from fastapi.testclient import TestClient
+        import server.app as modulo_app
+
+        publicacoes: list[int] = []
+
+        class ProdutorFalso:
+            def publicar_colaboradores(self, colaboradores: list) -> bool:
+                publicacoes.append(len(colaboradores))
+                return True
+
+        produtor_original = modulo_app.rabbit_producer
+        intervalo_original = modulo_app.REPUBLICAR_LISTA_SEGUNDOS
+        modulo_app.rabbit_producer = ProdutorFalso()
+        modulo_app.REPUBLICAR_LISTA_SEGUNDOS = 0.1
+        try:
+            app = modulo_app.create_app(db_path=self.db_path, seed_default=True)
+            with TestClient(app):
+                time.sleep(0.5)
+            parado_em = len(publicacoes)
+            time.sleep(0.3)
+        finally:
+            modulo_app.rabbit_producer = produtor_original
+            modulo_app.REPUBLICAR_LISTA_SEGUNDOS = intervalo_original
+
+        # 1 publicação ao iniciar + várias periódicas, sempre com os 5 colaboradores
+        self.assertGreaterEqual(parado_em, 3)
+        self.assertTrue(all(n == 5 for n in publicacoes))
+        # Depois do shutdown, a thread para
+        self.assertEqual(len(publicacoes), parado_em)
+
+
 if __name__ == "__main__":
     unittest.main()

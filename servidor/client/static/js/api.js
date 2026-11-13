@@ -1,5 +1,5 @@
 /**
- * Utilitários compartilhados de comunicação com a API do Servidor Flask
+ * Utilitários compartilhados de comunicação com a API do servidor (FastAPI)
  */
 
 const Api = {
@@ -11,9 +11,20 @@ const Api = {
     const response = await fetch(url, config);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.erro || `Erro HTTP ${response.status}`);
+      throw new Error(Api.mensagemDeErro(data, response.status));
     }
     return data;
+  },
+
+  // O login responde {erro: "..."}; o FastAPI responde {detail: "..."} nos erros das rotas
+  // e {detail: [{msg: "..."}]} quando um campo do formulário é inválido (422).
+  mensagemDeErro(data, status) {
+    if (data.erro) return data.erro;
+    if (typeof data.detail === "string") return data.detail;
+    if (Array.isArray(data.detail) && data.detail.length) {
+      return data.detail.map((d) => `${(d.loc || []).slice(-1)[0] || "campo"}: ${d.msg}`).join("; ");
+    }
+    return `Erro HTTP ${status}`;
   },
 
   formatarDuracao(segundosTotais) {

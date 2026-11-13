@@ -108,6 +108,11 @@ class RaspberryPiClient:
     # -------------------------------------------------------------------------
 
     def atualizar_cache(self, dados: dict[str, Any]) -> None:
+        # O servidor republica a lista a cada minuto; se nada mudou, não regrava o
+        # cartão SD nem polui o log. O cache.json precisa existir para valer no próximo boot.
+        if dados.get("colaboradores") == self.colaboradores_cache and self.cache_file.exists():
+            logger.debug("Lista recebida sem alterações.")
+            return
         temp_file = self.cache_file.with_suffix(".tmp")
         with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(dados, f, ensure_ascii=False, indent=2)

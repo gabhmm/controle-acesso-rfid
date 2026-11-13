@@ -172,6 +172,8 @@ Na Pi, edite [`embarcado/hardware/config.py`](embarcado/hardware/config.py): `RA
 
 Sem conexão com o RabbitMQ, a Pi continua decidindo com o `cache.json` e guarda os eventos em `pendentes.jsonl`. Uma thread tenta reenviá-los a cada 15 s (`REENVIO_PENDENTES_SEGUNDOS`), sem depender de uma nova leitura. Se ela nunca recebeu a lista, todo cartão é `INVASAO`.
 
+O servidor publica a lista de colaboradores ao iniciar, a cada alteração no painel e, por garantia, a cada 60 s (`REPUBLICAR_LISTA_SEGUNDOS`). Assim, uma Pi que liga sem `cache.json` recebe a lista em até 1 minuto. A Pi ignora uma lista igual à que já tem, sem regravar o arquivo.
+
 No servidor, se a gravação no banco falhar (banco travado, schema antigo), o worker devolve o evento à fila e tenta de novo; só descarta mensagens inválidas.
 
 Os arquivos `cache.json`, `estado.json` e `pendentes.jsonl` são dados locais da Pi e ficam fora do git. Num clone novo, a Pi começa sem ninguém na sala e recebe a lista do servidor ao conectar.

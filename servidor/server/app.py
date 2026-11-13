@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from server.config import ADMIN_PASS, ADMIN_USER, DB_PATH, PROJECT_ROOT
+from server.config import ADMIN_PASS, ADMIN_USER, DB_PATH, PROJECT_ROOT, REPUBLICAR_LISTA_SEGUNDOS
 from server.database import DatabaseRepository
 from server.models import (
     Colaborador,
@@ -34,7 +35,7 @@ STATIC_DIR = PROJECT_ROOT / "client" / "static"
 def create_app(db_path: Path | str | None = None, seed_default: bool = True) -> FastAPI:
     """Factory da aplicação FastAPI para o Controle de Acesso Distribuído."""
     app = FastAPI(
-        title="Controle de Acesso RFID & Monitoramento — Lab AAA",
+        title="Controle de Acesso RFID & Monitoramento",
         description="Servidor REST em FastAPI integrado a Mensageria RabbitMQ e Cache Redis conforme Contrato RabbitMQ v1.",
         version="2.0.0",
     )
@@ -69,13 +70,33 @@ def create_app(db_path: Path | str | None = None, seed_default: bool = True) -> 
         colabs = repo.listar_colaboradores()
         rabbit_producer.publicar_colaboradores([c.to_dict() for c in colabs])
 
-    # Publica a lista inicial ao iniciar o servidor
+    parar_republicacao = threading.Event()
+
+    def republicar_periodicamente() -> None:
+        """Republica a lista em intervalos fixos.
+
+        A fila da Pi guarda só a mensagem mais recente (x-max-length: 1), então
+        republicar não acumula nada. Cobre a Pi que liga sem cache.json depois que
+        a última lista já foi consumida e a alteração feita com o RabbitMQ fora do ar.
+        """
+        while not parar_republicacao.wait(REPUBLICAR_LISTA_SEGUNDOS):
+            try:
+                sincronizar_colaboradores_com_pi()
+            except Exception:
+                pass
+
+    # Publica a lista ao iniciar o servidor e depois periodicamente
     @app.on_event("startup")
     def on_startup() -> None:
         try:
             sincronizar_colaboradores_com_pi()
         except Exception:
             pass
+        threading.Thread(target=republicar_periodicamente, daemon=True).start()
+
+    @app.on_event("shutdown")
+    def on_shutdown() -> None:
+        parar_republicacao.set()
 
     # =========================================================================
     # ROTAS DE PÁGINAS WEB (FRONT-END)

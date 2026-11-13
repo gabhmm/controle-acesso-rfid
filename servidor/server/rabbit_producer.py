@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
@@ -79,7 +80,8 @@ class RabbitMQProducer:
         self.habilitado = habilitado
         self._ultima_tentativa: float = 0.0
         self._intervalo_tentativa: float = 10.0
-        self.fila_memoria: list[dict[str, Any]] = []
+        # Últimas publicações, para testes. Limitada: o servidor republica a lista periodicamente.
+        self.fila_memoria: deque[dict[str, Any]] = deque(maxlen=20)
 
     def _obter_conexao(self) -> pika.BlockingConnection | None:
         if not self.habilitado:
